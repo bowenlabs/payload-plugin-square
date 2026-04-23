@@ -1,11 +1,11 @@
 import type { Config } from 'payload'
 
-import { Customers } from './collections/Customers.js'
-import { Orders } from './collections/Orders.js'
+import { createCustomersCollection } from './collections/Customers.js'
+import { createOrdersCollection } from './collections/Orders.js'
 import { createSquareCatalogItemsCollection } from './collections/SquareCatalogItems.js'
-import { SquarePayments } from './collections/SquarePayments.js'
-import { SquareSubscriptions } from './collections/SquareSubscriptions.js'
-import { SquareWebhookEvents } from './collections/SquareWebhookEvents.js'
+import { createSquarePaymentsCollection } from './collections/SquarePayments.js'
+import { createSquareSubscriptionsCollection } from './collections/SquareSubscriptions.js'
+import { createSquareWebhookEventsCollection } from './collections/SquareWebhookEvents.js'
 import { createCheckoutHandler } from './endpoints/checkout.js'
 import { inventoryStreamHandler } from './endpoints/inventoryStream.js'
 import { createLoyaltyBalanceHandler } from './endpoints/loyaltyBalance.js'
@@ -20,6 +20,7 @@ import { createSubscribeHandler } from './endpoints/subscribe.js'
 import { createSubscriptionPlansHandler } from './endpoints/subscriptionPlans.js'
 import { makeSyncHandler } from './endpoints/syncEndpoint.js'
 import { createWebhookHandler } from './endpoints/webhook.js'
+import { defaultIsAdmin } from './lib/accessControl.js'
 import { primaryLocation } from './lib/locationUtils.js'
 import { syncCatalog } from './tasks/syncCatalog.js'
 import type { PayloadPluginSquareConfig } from './types.js'
@@ -39,12 +40,14 @@ export type {
   SyncContext,
   WebhookContext,
 } from './types.js'
-export { SquareSubscriptions } from './collections/SquareSubscriptions.js'
+export { createSquareSubscriptionsCollection } from './collections/SquareSubscriptions.js'
+export { defaultIsAdmin } from './lib/accessControl.js'
 
 export const payloadPluginSquare =
   (pluginOptions: PayloadPluginSquareConfig) =>
   (config: Config): Config => {
     const mediaCollectionSlug = pluginOptions.mediaCollectionSlug ?? 'media'
+    const isAdmin = pluginOptions.isAdmin ?? defaultIsAdmin
 
     if (!config.collections) {
       config.collections = []
@@ -53,11 +56,11 @@ export const payloadPluginSquare =
     // Always register collections so the DB schema stays consistent across environments
     config.collections.push(
       createSquareCatalogItemsCollection(mediaCollectionSlug),
-      Orders,
-      Customers,
-      SquarePayments,
-      SquareWebhookEvents,
-      SquareSubscriptions,
+      createOrdersCollection(isAdmin),
+      createCustomersCollection(isAdmin),
+      createSquarePaymentsCollection(isAdmin),
+      createSquareWebhookEventsCollection(isAdmin),
+      createSquareSubscriptionsCollection(isAdmin),
     )
 
     if (pluginOptions.disabled) {
@@ -86,11 +89,13 @@ export const payloadPluginSquare =
       })
     }
 
-    config.endpoints.push({
-      path: '/square/inventory-stream',
-      method: 'get',
-      handler: inventoryStreamHandler,
-    })
+    if (endpointOptions.inventoryStream !== false) {
+      config.endpoints.push({
+        path: '/square/inventory-stream',
+        method: 'get',
+        handler: inventoryStreamHandler,
+      })
+    }
 
     if (pluginOptions.loyalty) {
       config.endpoints.push({

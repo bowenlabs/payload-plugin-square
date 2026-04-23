@@ -39,6 +39,11 @@ export default buildConfig({
       mediaCollectionSlug: 'square-media', // store catalog images separately (recommended)
       syncOnInit: true,               // sync catalog on server start
       syncSchedule: '0 * * * *',      // optional: also sync hourly via Jobs Queue
+
+      // Tell the plugin who is an admin. Defaults to checking user.roles.includes('admin').
+      // Override this if your user model uses a different shape (e.g. a boolean field).
+      isAdmin: (user) => (user as any).roles?.includes('admin') ?? false,
+
       loyalty: {                       // optional: enable Square Loyalty
         programId: 'main',             // Square loyalty program ID (default: 'main')
       },
@@ -72,17 +77,14 @@ All collections are grouped under **Square** in the Payload admin sidebar.
 
 | Slug | Admin Label | Description |
 |---|---|---|
-| `catalog` | Catalog | Read-only. Synced catalog items with variations and inventory counts. |
-| `orders` | Orders | Orders created at checkout. |
-| `customers` | Customers | Customer records linked to Payload users and Square loyalty accounts. |
-| `payments` | Payments | Read-only. Raw Square payment responses for reconciliation. |
-| `square-webhook-events` | Webhook Events | Read-only. Processed webhook event IDs for replay protection. |
-| `square-subscriptions` | Subscriptions | Active subscriptions. Created via the subscribe endpoint; status synced via webhook. |
+| `catalog` | Catalog | Public read. Synced catalog items with variations and inventory counts. |
+| `orders` | Orders | Admins see all; users see only their own orders. |
+| `customers` | Customers | Admins see all; users see only their own customer record. |
+| `payments` | Payments | Admin only. Raw Square payment responses for reconciliation. |
+| `square-webhook-events` | Webhook Events | Admin only. Processed webhook event IDs for replay protection. |
+| `square-subscriptions` | Subscriptions | Admins see all; users see only their own subscriptions. |
 
-> **Access control note:** All plugin collections default to `read: ({ req }) => !!req.user` — any authenticated user can read all records via the Payload REST API. If your storefront gives end-users Payload accounts, override the `read` access function on `orders`, `customers`, and `square-subscriptions` to add row-level filtering. Example for orders:
-> ```ts
-> read: ({ req }) => req.user?.roles?.includes('admin') || { user: { equals: req.user?.id } }
-> ```
+Row-level access control is enforced automatically based on the `isAdmin` predicate you pass to the plugin (see [Plugin Options](#plugin-options)). The default checks `user.roles.includes('admin')` — add a `roles` field to your users collection to use it out of the box.
 
 ## API Endpoints
 
@@ -205,6 +207,15 @@ type PayloadPluginSquareConfig = {
     webhook?: boolean                       // default: true
     sync?: boolean                          // default: true
   }
+  /**
+   * Predicate used for row-level access control on all plugin collections.
+   * Admins can read every record; non-admins can only read their own.
+   * Defaults to: (user) => user?.roles?.includes('admin')
+   *
+   * Override when your user model uses a different shape:
+   *   isAdmin: (user) => (user as MyUser).isAdmin === true
+   */
+  isAdmin?: (user: unknown) => boolean
   loyalty?: {
     programId?: string                      // default: 'main'
   }
@@ -309,23 +320,43 @@ For nonce-based testing (bypass the card form), see [Square Sandbox test values]
 
 ### Collection access control
 
-All plugin collections default to `read: ({ req }) => !!req.user`, which allows any authenticated user to read all records via `GET /api/orders`, `GET /api/customers`, etc. This is fine for purely admin-facing stores, but **if your storefront gives end-users Payload accounts, you must tighten these to add row-level filtering** to prevent users from reading each other's data.
+Row-level access control is built into every plugin collection. Admins can read all records; authenticated non-admins can only read their own. Unauthenticated requests are always rejected.
 
-Override the collection's `read` access in your Payload config — for example, restricting orders to the owner or an admin:
+The plugin determines admin status via the `isAdmin` option (defaults to `user.roles.includes('admin')`). To use the default, add a `roles` field to your users collection:
 
 ```ts
-// In your payload.config.ts, after building the config:
-const config = buildConfig({
-  plugins: [
-    payloadPluginSquare({ ... }),
+// In your users collection:
+{
+  name: 'roles',
+  type: 'select',
+  hasMany: true,
+  defaultValue: ['user'],
+  options: [
+    { label: 'Admin', value: 'admin' },
+    { label: 'User', value: 'user' },
   ],
-})
-
-// Or override per-collection via an afterPlugin hook or by manually patching config.collections:
-// orders: read: ({ req }) => req.user?.roles?.includes('admin') || { user: { equals: req.user?.id } }
-// customers: read: ({ req }) => req.user?.roles?.includes('admin') || { user: { equals: req.user?.id } }
-// square-subscriptions: read: ({ req }) => req.user?.roles?.includes('admin') || { customer: { user: { equals: req.user?.id } } }
+}
 ```
+
+If your user model uses a different shape, pass a custom predicate:
+
+```ts
+payloadPluginSquare({
+  isAdmin: (user) => (user as MyUser).isAdmin === true,
+  // ...
+})
+```
+
+**Access rules per collection:**
+
+| Collection | Admin | Authenticated user | Guest |
+|---|---|---|---|
+| `catalog` | Read | Read | Read |
+| `orders` | All records | Own orders only | ✗ |
+| `customers` | All records | Own record only | ✗ |
+| `payments` | All records | ✗ | ✗ |
+| `square-webhook-events` | All records | ✗ | ✗ |
+| `square-subscriptions` | All records | Own subscriptions only | ✗ |
 
 ### Webhook replay protection
 

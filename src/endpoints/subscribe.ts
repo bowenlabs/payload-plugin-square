@@ -197,6 +197,7 @@ export function createSubscribeHandler(options: PayloadPluginSquareConfig): Payl
         squareCustomerId,
         squareCardId,
         customer: payloadCustomerId,
+        userId: userId ?? undefined,
       },
       overrideAccess: true,
     })

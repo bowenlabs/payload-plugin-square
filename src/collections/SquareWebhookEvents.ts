@@ -1,6 +1,10 @@
 import type { CollectionConfig } from 'payload'
 
-export const SquareWebhookEvents: CollectionConfig = {
+import { adminOnlyAccess } from '../lib/accessControl.js'
+
+export const createSquareWebhookEventsCollection = (
+  isAdmin: (user: unknown) => boolean,
+): CollectionConfig => ({
   slug: 'square-webhook-events',
   labels: {
     singular: 'Webhook Event',
@@ -13,7 +17,8 @@ export const SquareWebhookEvents: CollectionConfig = {
     description: 'Processed Square webhook event IDs — used for replay protection.',
   },
   access: {
-    read: ({ req }) => !!req.user,
+    // Internal dedup log — admins only.
+    read: adminOnlyAccess(isAdmin),
     create: () => false,
     update: () => false,
     delete: () => false,
@@ -23,4 +28,4 @@ export const SquareWebhookEvents: CollectionConfig = {
     { name: 'eventType', type: 'text' },
   ],
   timestamps: true,
-}
+})

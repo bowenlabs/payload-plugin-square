@@ -8,12 +8,12 @@ const baseOptions = {
   locationId: 'LOC_TEST',
 }
 
-/** Minimal Payload config that satisfies the type signature. */
-const emptyConfig = {} as Config
+/** Returns a fresh minimal config each call — prevents mutation leaking between tests. */
+const emptyConfig = () => ({} as Config)
 
 describe('payloadPluginSquare — collections', () => {
   it('registers all five Square collections', () => {
-    const config = payloadPluginSquare(baseOptions)(emptyConfig)
+    const config = payloadPluginSquare(baseOptions)(emptyConfig())
     const slugs = config.collections?.map((c) => c.slug) ?? []
     expect(slugs).toContain('catalog')
     expect(slugs).toContain('orders')
@@ -32,7 +32,7 @@ describe('payloadPluginSquare — collections', () => {
   })
 
   it('still registers collections when disabled (schema consistency)', () => {
-    const config = payloadPluginSquare({ ...baseOptions, disabled: true })(emptyConfig)
+    const config = payloadPluginSquare({ ...baseOptions, disabled: true })(emptyConfig())
     const slugs = config.collections?.map((c) => c.slug) ?? []
     expect(slugs).toContain('catalog')
     expect(slugs).toContain('orders')
@@ -41,7 +41,7 @@ describe('payloadPluginSquare — collections', () => {
 
 describe('payloadPluginSquare — endpoints', () => {
   it('registers checkout, webhook, inventory-stream, and sync endpoints by default', () => {
-    const config = payloadPluginSquare(baseOptions)(emptyConfig)
+    const config = payloadPluginSquare(baseOptions)(emptyConfig())
     const paths = config.endpoints?.map((e) => e.path) ?? []
     expect(paths).toContain('/square/checkout')
     expect(paths).toContain('/square/webhook')
@@ -50,7 +50,7 @@ describe('payloadPluginSquare — endpoints', () => {
   })
 
   it('does not register any endpoints when disabled', () => {
-    const config = payloadPluginSquare({ ...baseOptions, disabled: true })(emptyConfig)
+    const config = payloadPluginSquare({ ...baseOptions, disabled: true })(emptyConfig())
     expect(config.endpoints).toBeUndefined()
   })
 
@@ -58,7 +58,7 @@ describe('payloadPluginSquare — endpoints', () => {
     const config = payloadPluginSquare({
       ...baseOptions,
       endpoints: { checkout: false },
-    })(emptyConfig)
+    })(emptyConfig())
     const paths = config.endpoints?.map((e) => e.path) ?? []
     expect(paths).not.toContain('/square/checkout')
     expect(paths).toContain('/square/webhook') // others still present
@@ -68,7 +68,7 @@ describe('payloadPluginSquare — endpoints', () => {
     const config = payloadPluginSquare({
       ...baseOptions,
       endpoints: { webhook: false },
-    })(emptyConfig)
+    })(emptyConfig())
     const paths = config.endpoints?.map((e) => e.path) ?? []
     expect(paths).not.toContain('/square/webhook')
   })
@@ -77,22 +77,31 @@ describe('payloadPluginSquare — endpoints', () => {
     const config = payloadPluginSquare({
       ...baseOptions,
       endpoints: { sync: false },
-    })(emptyConfig)
+    })(emptyConfig())
     const paths = config.endpoints?.map((e) => e.path) ?? []
     expect(paths).not.toContain('/square/sync')
+  })
+
+  it('omits inventory-stream endpoint when endpoints.inventoryStream is false', () => {
+    const config = payloadPluginSquare({
+      ...baseOptions,
+      endpoints: { inventoryStream: false },
+    })(emptyConfig())
+    const paths = config.endpoints?.map((e) => e.path) ?? []
+    expect(paths).not.toContain('/square/inventory-stream')
   })
 
   it('registers loyalty balance endpoint when loyalty is configured', () => {
     const config = payloadPluginSquare({
       ...baseOptions,
       loyalty: { programId: 'main' },
-    })(emptyConfig)
+    })(emptyConfig())
     const paths = config.endpoints?.map((e) => e.path) ?? []
     expect(paths).toContain('/square/loyalty/balance')
   })
 
   it('does not register loyalty endpoint without loyalty config', () => {
-    const config = payloadPluginSquare(baseOptions)(emptyConfig)
+    const config = payloadPluginSquare(baseOptions)(emptyConfig())
     const paths = config.endpoints?.map((e) => e.path) ?? []
     expect(paths).not.toContain('/square/loyalty/balance')
   })
@@ -103,7 +112,7 @@ describe('payloadPluginSquare — scheduled sync', () => {
     const config = payloadPluginSquare({
       ...baseOptions,
       syncSchedule: '0 * * * *',
-    })(emptyConfig)
+    })(emptyConfig())
     const tasks = config.jobs?.tasks ?? []
     expect(tasks.some((t) => t.slug === 'square-catalog-sync')).toBe(true)
   })
@@ -112,7 +121,7 @@ describe('payloadPluginSquare — scheduled sync', () => {
     const config = payloadPluginSquare({
       ...baseOptions,
       syncSchedule: '0 * * * *',
-    })(emptyConfig)
+    })(emptyConfig())
     const autoRun = config.jobs?.autoRun
     expect(Array.isArray(autoRun)).toBe(true)
     if (Array.isArray(autoRun)) {
@@ -151,7 +160,7 @@ describe('payloadPluginSquare — scheduled sync', () => {
   })
 
   it('does not create a job when syncSchedule is not provided', () => {
-    const config = payloadPluginSquare(baseOptions)(emptyConfig)
+    const config = payloadPluginSquare(baseOptions)(emptyConfig())
     expect(config.jobs).toBeUndefined()
   })
 })
@@ -161,7 +170,7 @@ describe('payloadPluginSquare — syncOnInit', () => {
     const config = payloadPluginSquare({
       ...baseOptions,
       syncOnInit: true,
-    })(emptyConfig)
+    })(emptyConfig())
     expect(typeof config.onInit).toBe('function')
   })
 
@@ -169,7 +178,7 @@ describe('payloadPluginSquare — syncOnInit', () => {
     const config = payloadPluginSquare({
       ...baseOptions,
       syncOnInit: false,
-    })(emptyConfig)
+    })(emptyConfig())
     expect(config.onInit).toBeUndefined()
   })
 

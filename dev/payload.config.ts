@@ -24,6 +24,29 @@ export default buildConfig({
   },
   collections: [
     {
+      slug: 'users',
+      auth: true,
+      admin: { useAsTitle: 'email' },
+      fields: [
+        {
+          name: 'roles',
+          type: 'select',
+          hasMany: true,
+          defaultValue: ['user'],
+          options: [
+            { label: 'Admin', value: 'admin' },
+            { label: 'User', value: 'user' },
+          ],
+          // Only admins can promote/demote roles
+          access: {
+            update: ({ req }) =>
+              Array.isArray((req.user as { roles?: string[] } | null)?.roles) &&
+              ((req.user as { roles: string[] }).roles.includes('admin')),
+          },
+        },
+      ],
+    },
+    {
       slug: 'posts',
       fields: [],
     },
@@ -58,6 +81,9 @@ export default buildConfig({
   },
   plugins: [
     payloadPluginSquare({
+      isAdmin: (user) =>
+        Array.isArray((user as { roles?: string[] } | null)?.roles) &&
+        (user as { roles: string[] }).roles.includes('admin'),
       accessToken: process.env.SQUARE_ACCESS_TOKEN || '',
       locationId: process.env.SQUARE_LOCATION_ID || '',
       environment: (process.env.SQUARE_ENVIRONMENT as 'sandbox' | 'production') || 'sandbox',

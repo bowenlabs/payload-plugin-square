@@ -1,6 +1,10 @@
 import type { CollectionConfig } from 'payload'
 
-export const Customers: CollectionConfig = {
+import { adminOrSelfAccess } from '../lib/accessControl.js'
+
+export const createCustomersCollection = (
+  isAdmin: (user: unknown) => boolean,
+): CollectionConfig => ({
   slug: 'customers',
   admin: {
     useAsTitle: 'displayName',
@@ -10,10 +14,7 @@ export const Customers: CollectionConfig = {
       'Square customer records. Created automatically at checkout for guests and logged-in users. Loyalty balance is synced from Square via webhook.',
   },
   access: {
-    // All authenticated users can read customer records — needed for admin panel visibility.
-    // ⚠ If end-users have Payload accounts, tighten this to prevent users from reading
-    // each other's email/loyalty data via GET /api/customers.
-    read: ({ req }) => !!req.user,
+    read: adminOrSelfAccess(isAdmin, (userId) => ({ user: { equals: userId } })),
     create: () => false,
     update: () => false,
     delete: () => false,
@@ -66,4 +67,4 @@ export const Customers: CollectionConfig = {
     },
   ],
   timestamps: true,
-}
+})

@@ -1,6 +1,10 @@
 import type { CollectionConfig } from 'payload'
 
-export const Orders: CollectionConfig = {
+import { adminOrSelfAccess } from '../lib/accessControl.js'
+
+export const createOrdersCollection = (
+  isAdmin: (user: unknown) => boolean,
+): CollectionConfig => ({
   slug: 'orders',
   admin: {
     useAsTitle: 'orderNumber',
@@ -8,12 +12,7 @@ export const Orders: CollectionConfig = {
     group: 'Square',
   },
   access: {
-    // All authenticated users can read orders — needed for admin panel visibility.
-    // ⚠ If end-users have Payload accounts (e.g. a storefront login), tighten this in your
-    // app config to add row-level filtering, otherwise users can read each other's orders
-    // via GET /api/orders. Example:
-    //   read: ({ req }) => req.user?.roles?.includes('admin') || { user: { equals: req.user?.id } }
-    read: ({ req }) => !!req.user,
+    read: adminOrSelfAccess(isAdmin, (userId) => ({ user: { equals: userId } })),
     create: () => false,
     update: () => false,
     delete: () => false,
@@ -166,4 +165,4 @@ export const Orders: CollectionConfig = {
       admin: { description: 'Square fulfillment UID — used to match order.fulfillment.updated events' },
     },
   ],
-}
+})

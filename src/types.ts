@@ -24,6 +24,8 @@ export type PayloadPluginSquareConfig = {
   endpoints?: {
     checkout?: boolean
     webhook?: boolean
+    /** Server-sent events stream for real-time inventory updates */
+    inventoryStream?: boolean
     sync?: boolean
   }
   /**
@@ -50,6 +52,16 @@ export type PayloadPluginSquareConfig = {
      */
     freeShippingThreshold?: number
   }
+  /**
+   * Predicate that returns true when the given Payload user should be treated as an admin.
+   * Admins can read all records in the plugin's collections; non-admins can only read their own.
+   * Defaults to checking `user.roles.includes('admin')`.
+   *
+   * @example
+   * // Custom boolean field instead of a roles array:
+   * isAdmin: (user) => (user as any).isAdmin === true
+   */
+  isAdmin?: (user: unknown) => boolean
   /**
    * Enable Square Subscriptions. Omit to disable.
    * Exposes endpoints for listing plans, subscribing, and managing subscriptions.

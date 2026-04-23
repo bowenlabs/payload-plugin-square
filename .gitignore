@@ -6,11 +6,10 @@
 .pnp.js
 .yarn/install-state.gz
 
+# Editor
+/.vscode/*
 /.idea/*
 !/.idea/runConfigurations
-
-# Editor
-.vscode/
 
 # testing
 /coverage

@@ -1,6 +1,10 @@
 import type { CollectionConfig } from 'payload'
 
-export const SquarePayments: CollectionConfig = {
+import { adminOnlyAccess } from '../lib/accessControl.js'
+
+export const createSquarePaymentsCollection = (
+  isAdmin: (user: unknown) => boolean,
+): CollectionConfig => ({
   slug: 'payments',
   admin: {
     useAsTitle: 'squarePaymentId',
@@ -9,9 +13,8 @@ export const SquarePayments: CollectionConfig = {
     description: 'Internal audit log of raw Square payment responses. Do not expose to end users.',
   },
   access: {
-    // Restrict to authenticated users only; consuming apps should further
-    // tighten this to admin-role users via their own access control override.
-    read: ({ req }) => !!req.user,
+    // Payment audit records contain sensitive financial data — admins only.
+    read: adminOnlyAccess(isAdmin),
     create: () => false,
     update: () => false,
     delete: () => false,
@@ -48,4 +51,4 @@ export const SquarePayments: CollectionConfig = {
       defaultValue: 'USD',
     },
   ],
-}
+})

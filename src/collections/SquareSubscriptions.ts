@@ -1,6 +1,10 @@
 import type { CollectionConfig } from 'payload'
 
-export const SquareSubscriptions: CollectionConfig = {
+import { adminOrSelfAccess } from '../lib/accessControl.js'
+
+export const createSquareSubscriptionsCollection = (
+  isAdmin: (user: unknown) => boolean,
+): CollectionConfig => ({
   slug: 'square-subscriptions',
   labels: { singular: 'Subscription', plural: 'Subscriptions' },
   admin: {
@@ -10,10 +14,9 @@ export const SquareSubscriptions: CollectionConfig = {
     description: 'Active Square subscriptions. Created via the subscribe endpoint; status synced via webhooks.',
   },
   access: {
-    // All authenticated users can read subscriptions — needed for admin panel visibility.
-    // ⚠ If end-users have Payload accounts, tighten this to prevent users from reading
-    // each other's subscription records via GET /api/square-subscriptions.
-    read: ({ req }) => !!req.user,
+    // userId is stored directly (denormalized) to keep this a simple single-field query
+    // rather than a two-level join (subscription → customer → user).
+    read: adminOrSelfAccess(isAdmin, (userId) => ({ userId: { equals: userId } })),
     create: () => false,
     update: () => false,
     delete: () => false,
@@ -93,6 +96,14 @@ export const SquareSubscriptions: CollectionConfig = {
       index: true,
       admin: { position: 'sidebar' },
     },
+    {
+      // Denormalized from customer.user — enables a simple single-field access control query
+      // without relying on a two-level join (subscription → customer → user).
+      name: 'userId',
+      type: 'text',
+      index: true,
+      admin: { readOnly: true, position: 'sidebar', description: 'Payload user ID of the subscriber' },
+    },
   ],
   timestamps: true,
-}
+})
