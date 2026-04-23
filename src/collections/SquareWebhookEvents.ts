@@ -2,6 +2,10 @@ import type { CollectionConfig } from 'payload'
 
 export const SquareWebhookEvents: CollectionConfig = {
   slug: 'square-webhook-events',
+  labels: {
+    singular: 'Webhook Event',
+    plural: 'Webhook Events',
+  },
   admin: {
     useAsTitle: 'eventId',
     defaultColumns: ['eventId', 'eventType', 'createdAt'],

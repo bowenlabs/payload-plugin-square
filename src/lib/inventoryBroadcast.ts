@@ -10,9 +10,8 @@ export function removeConnection(controller: Controller) {
   connections.delete(controller)
 }
 
-export function broadcastInventoryUpdate(variationSquareId: string, quantity: number) {
-  const data = JSON.stringify({ variationSquareId, quantity })
-  const chunk = new TextEncoder().encode(`data: ${data}\n\n`)
+function broadcast(payload: string) {
+  const chunk = new TextEncoder().encode(payload)
   for (const controller of connections) {
     try {
       controller.enqueue(chunk)
@@ -20,4 +19,12 @@ export function broadcastInventoryUpdate(variationSquareId: string, quantity: nu
       connections.delete(controller)
     }
   }
+}
+
+export function broadcastInventoryUpdate(variationSquareId: string, quantity: number) {
+  broadcast(`data: ${JSON.stringify({ type: 'inventory', variationSquareId, quantity })}\n\n`)
+}
+
+export function broadcastCatalogUpdate() {
+  broadcast(`data: ${JSON.stringify({ type: 'catalog' })}\n\n`)
 }

@@ -31,25 +31,52 @@ function formatPrice(cents: number, currency = 'USD') {
 export default function OrderConfirmationPage() {
   const { id } = useParams<{ id: string }>()
   const [order, setOrder] = useState<Order | null>(null)
+  const [notFound, setNotFound] = useState(false)
 
   useEffect(() => {
+    // 1. Try sessionStorage first (set immediately after checkout redirect)
     const stored = sessionStorage.getItem(`square_order_${id}`)
     if (stored) {
       try {
         setOrder(JSON.parse(stored) as Order)
+        return
       } catch {
-        // ignore
+        // fall through to API
       }
     }
+
+    // 2. Fall back to the Payload API — handles refreshes, direct links, and new tabs
+    void fetch(`/api/orders/${id}?depth=0`, { credentials: 'include' })
+      .then(async (res) => {
+        if (!res.ok) {
+          setNotFound(true)
+          return
+        }
+        const data = (await res.json()) as Order
+        setOrder(data)
+      })
+      .catch(() => setNotFound(true))
   }, [id])
+
+  if (notFound) {
+    return (
+      <main style={{ maxWidth: 600, margin: '0 auto', padding: '64px 24px', textAlign: 'center' }}>
+        <div style={{ fontSize: 48, marginBottom: 16 }}>🔍</div>
+        <h1 style={{ margin: '0 0 8px', fontSize: 24 }}>Order not found</h1>
+        <p style={{ color: '#6b7280', marginBottom: 20 }}>
+          This order doesn&apos;t exist or you don&apos;t have permission to view it.
+        </p>
+        <Link href="/" style={{ color: '#111', fontWeight: 600 }}>← Back to catalog</Link>
+      </main>
+    )
+  }
 
   if (!order) {
     return (
       <main style={{ maxWidth: 600, margin: '0 auto', padding: '64px 24px', textAlign: 'center' }}>
         <div style={{ fontSize: 48, marginBottom: 16 }}>✓</div>
         <h1 style={{ margin: '0 0 8px', fontSize: 24 }}>Order placed</h1>
-        <p style={{ color: '#6b7280' }}>Your order has been confirmed.</p>
-        <Link href="/" style={{ color: '#111', fontWeight: 600 }}>← Back to catalog</Link>
+        <p style={{ color: '#6b7280' }}>Loading order details…</p>
       </main>
     )
   }

@@ -198,7 +198,14 @@ export default function CatalogPage() {
     [],
   )
 
-  useInventoryStream(handleInventoryUpdate)
+  const handleCatalogUpdate = useCallback(() => {
+    fetch('/api/catalog?limit=100&depth=1')
+      .then((r) => r.json())
+      .then((data: { docs?: CatalogItem[] }) => setItems(data.docs ?? []))
+      .catch(() => null)
+  }, [])
+
+  useInventoryStream({ onInventoryUpdate: handleInventoryUpdate, onCatalogUpdate: handleCatalogUpdate })
 
   if (loading) {
     return (

@@ -68,7 +68,14 @@ export default function ItemPage() {
     [],
   )
 
-  useInventoryStream(handleInventoryUpdate)
+  const handleCatalogUpdate = useCallback(() => {
+    fetch(`/api/catalog/${id}?depth=1`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: CatalogItem | null) => { if (data) setItem(data) })
+      .catch(() => null)
+  }, [id])
+
+  useInventoryStream({ onInventoryUpdate: handleInventoryUpdate, onCatalogUpdate: handleCatalogUpdate })
 
   if (loading) {
     return <main style={{ padding: 40, textAlign: 'center', color: '#6b7280' }}>Loading…</main>

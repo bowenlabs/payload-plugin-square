@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import Script from 'next/script'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
+import { useAuth } from '../_auth/AuthContext.js'
 import type { CartItem } from '../_cart/CartContext.js'
 import { useCart } from '../_cart/CartContext.js'
 
@@ -70,10 +71,12 @@ function OrderSummary({ items, total }: { items: CartItem[]; total: number }) {
 
 export function CheckoutForm({ applicationId, locationId }: Props) {
   const { items, total, clear } = useCart()
+  const { user } = useAuth()
   const router = useRouter()
   const cardRef = useRef<SquareCard | null>(null)
   const [status, setStatus] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null)
   const [guestEmail, setGuestEmail] = useState('')
+  const [loyaltyOptIn, setLoyaltyOptIn] = useState(false)
   const [loading, setLoading] = useState(false)
   const [cardReady, setCardReady] = useState(false)
 
@@ -123,7 +126,9 @@ export function CheckoutForm({ applicationId, locationId }: Props) {
               quantity: i.quantity,
               unitPrice: i.unitPrice,
             })),
-            guestEmail: guestEmail || undefined,
+            userId: user?.id ?? undefined,
+            guestEmail: !user && guestEmail ? guestEmail : undefined,
+            loyaltyOptIn: loyaltyOptIn || undefined,
           },
         }),
       })
@@ -171,25 +176,69 @@ export function CheckoutForm({ applicationId, locationId }: Props) {
       <OrderSummary items={items} total={total} />
 
       <form onSubmit={(e) => void handleSubmit(e)} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div>
-          <label style={{ display: 'block', marginBottom: 6, fontSize: 14, fontWeight: 500 }}>
-            Email <span style={{ color: '#9ca3af', fontWeight: 400 }}>(optional — guest checkout)</span>
-          </label>
-          <input
-            type="email"
-            value={guestEmail}
-            onChange={(e) => setGuestEmail(e.target.value)}
-            placeholder="guest@example.com"
+        {user ? (
+          <div
             style={{
-              width: '100%',
-              padding: '10px 12px',
+              padding: '10px 14px',
               borderRadius: 6,
-              border: '1px solid #d1d5db',
+              background: '#f0fdf4',
               fontSize: 14,
-              boxSizing: 'border-box',
+              color: '#166534',
             }}
+          >
+            ✓ Signed in as <strong>{user.email as string}</strong> — your order will be linked to your account.
+          </div>
+        ) : (
+          <div>
+            <label style={{ display: 'block', marginBottom: 6, fontSize: 14, fontWeight: 500 }}>
+              Email <span style={{ color: '#9ca3af', fontWeight: 400 }}>(optional — for receipt)</span>
+            </label>
+            <input
+              type="email"
+              value={guestEmail}
+              onChange={(e) => setGuestEmail(e.target.value)}
+              placeholder="guest@example.com"
+              style={{
+                width: '100%',
+                padding: '10px 12px',
+                borderRadius: 6,
+                border: '1px solid #d1d5db',
+                fontSize: 14,
+                boxSizing: 'border-box',
+              }}
+            />
+            <p style={{ margin: '6px 0 0', fontSize: 12, color: '#9ca3af' }}>
+              Or{' '}
+              <a href="/login" style={{ color: '#111' }}>
+                sign in
+              </a>{' '}
+              to link this order to your account and earn loyalty points.
+            </p>
+          </div>
+        )}
+
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            cursor: 'pointer',
+            fontSize: 14,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={loyaltyOptIn}
+            onChange={(e) => setLoyaltyOptIn(e.target.checked)}
+            style={{ marginTop: 2, width: 16, height: 16, cursor: 'pointer', flexShrink: 0 }}
           />
-        </div>
+          <span>
+            <span style={{ fontWeight: 500 }}>Join the loyalty program</span>
+            <span style={{ color: '#6b7280', display: 'block', fontSize: 13 }}>
+              Earn points on this order and redeem them for discounts on future purchases.
+            </span>
+          </span>
+        </label>
 
         <div>
           <label style={{ display: 'block', marginBottom: 6, fontSize: 14, fontWeight: 500 }}>

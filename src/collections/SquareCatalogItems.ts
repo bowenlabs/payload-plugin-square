@@ -4,6 +4,10 @@ export const createSquareCatalogItemsCollection = (
   mediaCollectionSlug: string = 'media',
 ): CollectionConfig => ({
   slug: 'catalog',
+  labels: {
+    singular: 'Catalog Item',
+    plural: 'Catalog',
+  },
   access: {
     read: () => true,
     create: () => false,

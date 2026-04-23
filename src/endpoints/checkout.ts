@@ -3,11 +3,11 @@ import { SquareError } from 'square'
 
 import { primaryLocation, allLocations } from '../lib/locationUtils.js'
 import { createSquareClient } from '../lib/squareClient.js'
-import type { Cart, Order, PayloadPluginSquareConfig, SquarePayment } from '../types.js'
+import type { Cart, Customer, Order, PayloadPluginSquareConfig, SquarePayment } from '../types.js'
 
 export function createCheckoutHandler(options: PayloadPluginSquareConfig): PayloadHandler {
   return async (req) => {
-    const { accessToken, locationId, environment = 'sandbox', hooks } = options
+    const { accessToken, locationId, environment = 'sandbox', hooks, loyalty } = options
     const locationIdPrimary = primaryLocation(locationId)
     const locationIds = allLocations(locationId)
     const client = createSquareClient(accessToken, environment)
@@ -35,7 +35,6 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       )
     }
 
-    // All items must supply a variationId so we can verify prices server-side
     const variationIds = cart.items.map((i) => i.variationId).filter(Boolean) as string[]
     if (variationIds.length !== cart.items.length) {
       return Response.json(
@@ -104,7 +103,6 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
 
       for (const item of cart.items) {
         const available = inventoryMap.get(item.variationId!)
-        // Only block if the variation actively tracks inventory and stock is insufficient
         if (available !== undefined && available < item.quantity) {
           return Response.json(
             {
@@ -125,7 +123,103 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       throw err
     }
 
-    // ── Step 3: Create Square Order (catalog refs let Square apply taxes) ───
+    // ── Step 3: Find or create customer + loyalty account ───────────────────
+    const customerEmail = cart.guestEmail ?? undefined
+    const customerUserId = cart.userId ?? undefined
+    let customerId: string | undefined
+    let customerDoc: Customer | undefined
+    let loyaltyAccountId: string | undefined
+
+    if (customerUserId || customerEmail) {
+      const existing = await req.payload.find({
+        collection: 'customers',
+        where: customerUserId
+          ? { user: { equals: customerUserId } }
+          : { email: { equals: customerEmail } },
+        limit: 1,
+        overrideAccess: true,
+      })
+
+      if (existing.docs.length > 0) {
+        customerId = existing.docs[0]!.id as string
+        customerDoc = existing.docs[0] as unknown as Customer
+        loyaltyAccountId = customerDoc.loyaltyAccountId
+      } else {
+        // Try to find or create the Square customer record (non-fatal)
+        let squareCustomerId: string | undefined
+        try {
+          const searchResp = await client.customers.search({
+            query: { filter: { emailAddress: { exact: customerEmail } } },
+          })
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          squareCustomerId = (searchResp as any).customers?.[0]?.id
+
+          if (!squareCustomerId && customerEmail) {
+            const createResp = await client.customers.create({
+              emailAddress: customerEmail,
+              idempotencyKey: crypto.randomUUID(),
+            })
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            squareCustomerId = (createResp as any).customer?.id
+          }
+        } catch (err) {
+          req.payload.logger.warn({ msg: 'Failed to find/create Square customer', err })
+        }
+
+        const newCustomer = await req.payload.create({
+          collection: 'customers',
+          data: {
+            squareCustomerId: squareCustomerId ?? undefined,
+            user: customerUserId ?? undefined,
+            email: customerEmail ?? undefined,
+            loyaltyPoints: 0,
+          },
+          overrideAccess: true,
+        })
+        customerId = newCustomer.id as string
+        customerDoc = newCustomer as unknown as Customer
+      }
+
+      // Find or create Square loyalty account (non-fatal, only when customer has opted in)
+      if (loyalty && cart.loyaltyOptIn && customerEmail && !loyaltyAccountId) {
+        try {
+          const programId = loyalty.programId ?? 'main'
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const searchResp = await (client.loyalty as any).searchAccounts({
+            query: { mappings: [{ type: 'EMAIL', value: customerEmail }] },
+            limit: 1,
+          })
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          loyaltyAccountId = (searchResp as any).loyaltyAccounts?.[0]?.id
+
+          if (!loyaltyAccountId) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const createResp = await (client.loyalty as any).createAccount({
+              idempotencyKey: crypto.randomUUID(),
+              loyaltyAccount: {
+                programId,
+                mapping: { type: 'EMAIL', value: customerEmail },
+              },
+            })
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            loyaltyAccountId = (createResp as any).loyaltyAccount?.id
+          }
+
+          if (loyaltyAccountId && customerId) {
+            await req.payload.update({
+              collection: 'customers',
+              id: customerId,
+              data: { loyaltyAccountId },
+              overrideAccess: true,
+            })
+          }
+        } catch (err) {
+          req.payload.logger.warn({ msg: 'Failed to find/create Square loyalty account', err })
+        }
+      }
+    }
+
+    // ── Step 4: Create Square Order ─────────────────────────────────────────
     let squareOrder: NonNullable<Awaited<ReturnType<typeof client.orders.create>>['order']>
     try {
       const orderResponse = await client.orders.create({
@@ -155,7 +249,37 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       throw err
     }
 
-    // ── Step 4: Charge via Square Payments API ──────────────────────────────
+    // ── Step 5: Apply loyalty reward (if requested) ─────────────────────────
+    if (cart.loyaltyRewardDefinitionId && loyaltyAccountId) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (client.loyalty as any).createLoyaltyReward({
+          idempotencyKey: crypto.randomUUID(),
+          reward: {
+            loyaltyAccountId,
+            rewardDefinitionId: cart.loyaltyRewardDefinitionId,
+            orderId: squareOrder.id,
+          },
+        })
+
+        // Retrieve the order with the discount applied to get the updated total
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const updatedOrderResp = await (client.orders as any).retrieve(squareOrder.id)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if ((updatedOrderResp as any).order) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          squareOrder = (updatedOrderResp as any).order
+        }
+      } catch (err) {
+        req.payload.logger.error({ msg: 'Failed to apply loyalty reward', err })
+        return Response.json(
+          { error: 'Failed to apply loyalty reward — please try again without redeeming points' },
+          { status: 400 },
+        )
+      }
+    }
+
+    // ── Step 6: Charge via Square Payments API ──────────────────────────────
     let squarePaymentObj: NonNullable<
       Awaited<ReturnType<typeof client.payments.create>>['payment']
     >
@@ -184,7 +308,7 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       throw err
     }
 
-    // ── Step 5: Persist order to Payload DB ─────────────────────────────────
+    // ── Step 7: Persist order to Payload DB ─────────────────────────────────
     const subtotal = cart.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
     const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`
 
@@ -216,14 +340,14 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
           currency: squareOrder.totalMoney?.currency ?? 'USD',
           squarePaymentId: squarePaymentObj.id,
           squareOrderId: squareOrder.id,
-          user: cart.userId ?? undefined,
-          guestEmail: cart.guestEmail ?? undefined,
+          user: customerUserId ?? undefined,
+          guestEmail: customerEmail ?? undefined,
+          squareCustomer: customerId ?? undefined,
           lineItems: enrichedLineItems,
         },
         overrideAccess: true,
       })) as unknown as Order
     } catch (dbErr) {
-      // Payment succeeded but DB write failed — log Square IDs for manual reconciliation
       req.payload.logger.error({
         msg: 'Order DB write failed after successful Square payment — manual reconciliation required',
         squarePaymentId: squarePaymentObj.id,
@@ -240,14 +364,48 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       )
     }
 
-    // ── Step 6: Write audit record (non-fatal if it fails) ──────────────────
+    // ── Step 8: Accrue loyalty points via Square (non-fatal) ─────────────────
+    if (loyalty && cart.loyaltyOptIn && loyaltyAccountId) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (client.loyalty as any).accumulatePoints(loyaltyAccountId, {
+          accumulatePoints: { orderId: squareOrder.id },
+          idempotencyKey: crypto.randomUUID(),
+          locationId: locationIdPrimary,
+        })
+        // Sync the updated balance back to our customer record
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const accountResp = await (client.loyalty as any).retrieveLoyaltyAccount(loyaltyAccountId)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const updatedBalance = (accountResp as any).loyaltyAccount?.balance
+        if (customerId && updatedBalance !== undefined) {
+          await req.payload.update({
+            collection: 'customers',
+            id: customerId,
+            data: { loyaltyPoints: updatedBalance },
+            overrideAccess: true,
+          })
+        }
+      } catch (err) {
+        req.payload.logger.warn({ msg: 'Failed to accrue loyalty points via Square', err })
+        // loyalty.account.updated webhook will sync the balance if this fails
+      }
+    }
+
+    // ── Step 9: Write audit record (non-fatal) ───────────────────────────────
     try {
+      // Square SDK uses BigInt for monetary amounts; JSON.stringify throws on BigInt values,
+      // so we serialise/deserialise through a replacer that converts BigInt → Number first.
+      const safeRawResponse = JSON.parse(
+        JSON.stringify(squarePaymentObj, (_k, v) => (typeof v === 'bigint' ? Number(v) : v)),
+      ) as Record<string, unknown>
+
       await req.payload.create({
         collection: 'payments',
         data: {
           squarePaymentId: squarePaymentObj.id!,
           squareOrderId: squareOrder.id,
-          rawResponse: squarePaymentObj as unknown as Record<string, unknown>,
+          rawResponse: safeRawResponse,
           status: squarePaymentObj.status,
           amount: Number(squarePaymentObj.amountMoney?.amount ?? 0),
           currency: squarePaymentObj.amountMoney?.currency ?? 'USD',
@@ -262,8 +420,8 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       })
     }
 
-    // ── Step 7: Guest order confirmation email (non-fatal) ─────────────────
-    if (cart.guestEmail) {
+    // ── Step 10: Order confirmation email (non-fatal) ────────────────────────
+    if (customerEmail) {
       try {
         const lineItemsHtml = enrichedLineItems
           .map(
@@ -272,7 +430,7 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
           )
           .join('')
         await req.payload.sendEmail({
-          to: cart.guestEmail,
+          to: customerEmail,
           subject: `Order ${payloadOrder.orderNumber} confirmed`,
           html: `
             <h2>Thanks for your order!</h2>
@@ -291,7 +449,7 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       }
     }
 
-    // ── Step 8: afterCheckout hook ──────────────────────────────────────────
+    // ── Step 11: afterCheckout hook ──────────────────────────────────────────
     if (hooks?.afterCheckout) {
       const paymentShape: SquarePayment = {
         id: squarePaymentObj.id!,
@@ -304,7 +462,6 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       }
       await hooks.afterCheckout({ req, order: payloadOrder, payment: paymentShape })
     }
-
 
     return Response.json({ order: payloadOrder }, { status: 200 })
   }

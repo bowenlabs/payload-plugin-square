@@ -1,7 +1,8 @@
 import type { PayloadHandler } from 'payload'
 import { WebhooksHelper } from 'square'
 
-import { broadcastInventoryUpdate } from '../lib/inventoryBroadcast.js'
+import { broadcastCatalogUpdate, broadcastInventoryUpdate } from '../lib/inventoryBroadcast.js'
+import { syncCatalog } from '../tasks/syncCatalog.js'
 import type { PayloadPluginSquareConfig } from '../types.js'
 
 export function createWebhookHandler(options: PayloadPluginSquareConfig): PayloadHandler {
@@ -77,12 +78,24 @@ export function createWebhookHandler(options: PayloadPluginSquareConfig): Payloa
       await handlePaymentUpdated(req, data.object)
     }
 
+    if (type === 'loyalty.account.updated') {
+      await handleLoyaltyAccountUpdated(req, data.object)
+    }
+
     if (type === 'order.updated') {
       await handleOrderUpdated(req, data.object)
     }
 
     if (type === 'inventory.count.updated') {
       await handleInventoryCountUpdated(req, data.object)
+    }
+
+    if (type === 'catalog.version.updated') {
+      handleCatalogVersionUpdated(req, options)
+    }
+
+    if (type === 'refund.updated') {
+      await handleRefundUpdated(req, data.object)
     }
 
     // Square retries delivery on any non-200 response
@@ -133,6 +146,7 @@ async function handlePaymentUpdated(
         data: { status: newStatus },
         overrideAccess: true,
       })
+
     }
   }
 }
@@ -171,6 +185,112 @@ async function handleOrderUpdated(
   }
 }
 
+async function handleLoyaltyAccountUpdated(
+  req: Parameters<PayloadHandler>[0],
+  object: Record<string, unknown>,
+) {
+  type RawLoyaltyAccount = {
+    id?: string
+    balance?: number
+    mapping?: { type?: string; value?: string }
+  }
+  const account = (object as { loyalty_account?: RawLoyaltyAccount }).loyalty_account
+  if (!account?.id) return
+
+  const accountId = account.id
+  const balance = account.balance ?? 0
+  const email =
+    account.mapping?.type === 'EMAIL' ? account.mapping.value : undefined
+
+  // Find customer by loyaltyAccountId first, fall back to email
+  let customers = await req.payload.find({
+    collection: 'customers',
+    where: { loyaltyAccountId: { equals: accountId } },
+    limit: 1,
+    overrideAccess: true,
+  })
+
+  if (customers.docs.length === 0 && email) {
+    customers = await req.payload.find({
+      collection: 'customers',
+      where: { email: { equals: email } },
+      limit: 1,
+      overrideAccess: true,
+    })
+  }
+
+  if (customers.docs.length > 0) {
+    await req.payload.update({
+      collection: 'customers',
+      id: customers.docs[0]!.id as string,
+      data: { loyaltyPoints: balance, loyaltyAccountId: accountId },
+      overrideAccess: true,
+    })
+    req.payload.logger.info(`Loyalty balance synced: account ${accountId} → ${balance} pts`)
+  }
+}
+
+// Fire-and-forget: respond to Square immediately, sync in background
+function handleCatalogVersionUpdated(
+  req: Parameters<PayloadHandler>[0],
+  options: PayloadPluginSquareConfig,
+) {
+  const mediaCollectionSlug = options.mediaCollectionSlug ?? 'media'
+  void syncCatalog({
+    accessToken: options.accessToken,
+    environment: options.environment,
+    locationId: options.locationId,
+    mediaCollectionSlug,
+    payload: req.payload,
+  })
+    .then(({ synced }) => {
+      req.payload.logger.info(`catalog.version.updated sync complete — ${synced} item(s) updated`)
+      if (synced > 0) broadcastCatalogUpdate()
+    })
+    .catch((err: unknown) => {
+      req.payload.logger.error({ err }, 'catalog.version.updated sync failed')
+    })
+}
+
+async function handleRefundUpdated(
+  req: Parameters<PayloadHandler>[0],
+  object: Record<string, unknown>,
+) {
+  const refund = (object as { refund?: Record<string, unknown> }).refund
+  if (!refund) return
+
+  const squarePaymentId = refund['payment_id'] as string | undefined
+  const status = refund['status'] as string | undefined
+  if (!squarePaymentId || status !== 'COMPLETED') return
+
+  const orders = await req.payload.find({
+    collection: 'orders',
+    where: { squarePaymentId: { equals: squarePaymentId } },
+    overrideAccess: true,
+    limit: 1,
+  })
+  if (orders.docs.length === 0) return
+
+  const order = orders.docs[0]!
+  const orderTotal = order.total as number
+  const refundAmount = Number(
+    (refund['amount_money'] as { amount?: number } | undefined)?.amount ?? 0,
+  )
+
+  const newStatus = refundAmount >= orderTotal ? 'refunded' : 'partially_refunded'
+
+  await req.payload.update({
+    collection: 'orders',
+    id: order.id as string,
+    data: { status: newStatus },
+    overrideAccess: true,
+  })
+
+  req.payload.logger.info(
+    `Refund processed: order ${order.id as string} → ${newStatus} (refunded ${refundAmount} of ${orderTotal})`,
+  )
+}
+
 async function handleInventoryCountUpdated(
   req: Parameters<PayloadHandler>[0],
   object: Record<string, unknown>,
@@ -196,11 +316,13 @@ async function handleInventoryCountUpdated(
 
     req.payload.logger.info(`Looking for variation squareId=${variationSquareId} qty=${newQuantity}`)
 
-    // Fetch all items and match in memory — more reliable than nested array queries
+    // Fetch all items and match in memory — more reliable than nested array queries.
+    // pagination: false returns every document without a hard limit.
     const all = await req.payload.find({
       collection: 'catalog',
       overrideAccess: true,
-      limit: 200,
+      pagination: false,
+      limit: 0,
     })
 
     const result = all.docs.find((doc) =>

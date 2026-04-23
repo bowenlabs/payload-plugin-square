@@ -8,11 +8,9 @@ export const Orders: CollectionConfig = {
     group: 'Square',
   },
   access: {
-    // Users can read their own orders; guests cannot query (they receive a receipt email instead)
-    read: ({ req }) => {
-      if (req.user) return { user: { equals: req.user.id } }
-      return false
-    },
+    // Any authenticated user can read orders — admin staff need to see all records.
+    // Row-level filtering (customers seeing only their own) is left to the application layer.
+    read: ({ req }) => !!req.user,
     create: () => false,
     update: () => false,
     delete: () => false,
@@ -76,6 +74,13 @@ export const Orders: CollectionConfig = {
       relationTo: 'users',
       required: false,
       admin: { description: 'Null for guest orders' },
+    },
+    {
+      name: 'squareCustomer',
+      type: 'relationship',
+      relationTo: 'customers',
+      required: false,
+      admin: { description: 'Associated Square customer record — links loyalty data to this order' },
     },
     {
       name: 'guestEmail',

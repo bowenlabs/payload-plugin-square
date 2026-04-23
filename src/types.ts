@@ -26,6 +26,16 @@ export type PayloadPluginSquareConfig = {
     webhook?: boolean
     sync?: boolean
   }
+  /**
+   * Enable Square Loyalty integration. Omit to disable.
+   * Square's loyalty program rules (points per dollar, reward tiers) are configured
+   * in the Square Dashboard — the plugin calls Square's Loyalty API to accrue and
+   * redeem points, keeping the local balance in sync via the loyalty.account.updated webhook.
+   */
+  loyalty?: {
+    /** Square loyalty program ID. Defaults to 'main' (the merchant's primary program). */
+    programId?: string
+  }
   hooks?: {
     beforeCheckout?: (ctx: BeforeCheckoutContext) => Promise<void>
     afterCheckout?: (ctx: AfterCheckoutContext) => Promise<void>
@@ -38,6 +48,17 @@ export interface Cart {
   items: CartItem[]
   userId?: string
   guestEmail?: string
+  /**
+   * Set to true when the customer opts in to the loyalty program at checkout.
+   * When false/omitted, no loyalty account is created or looked up and no points are accrued.
+   */
+  loyaltyOptIn?: boolean
+  /**
+   * Square reward definition ID to redeem at checkout. Get available reward
+   * definition IDs from GET /api/square/loyalty/balance (availableRewards[].id).
+   * Only honoured when loyaltyOptIn is true.
+   */
+  loyaltyRewardDefinitionId?: string
 }
 
 export interface CartItem {
@@ -80,6 +101,17 @@ export interface SquarePayment {
   status: string
   amount: number
   currency: string
+}
+
+export interface Customer {
+  id: string
+  squareCustomerId?: string
+  loyaltyAccountId?: string
+  user?: string
+  email?: string
+  displayName?: string
+  /** Cached balance synced from Square via loyalty.account.updated webhook */
+  loyaltyPoints: number
 }
 
 export interface BeforeCheckoutContext {

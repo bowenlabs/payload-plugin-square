@@ -1,11 +1,13 @@
 import type { Config } from 'payload'
 
+import { Customers } from './collections/Customers.js'
 import { Orders } from './collections/Orders.js'
 import { createSquareCatalogItemsCollection } from './collections/SquareCatalogItems.js'
 import { SquarePayments } from './collections/SquarePayments.js'
 import { SquareWebhookEvents } from './collections/SquareWebhookEvents.js'
 import { createCheckoutHandler } from './endpoints/checkout.js'
 import { inventoryStreamHandler } from './endpoints/inventoryStream.js'
+import { createLoyaltyBalanceHandler } from './endpoints/loyaltyBalance.js'
 import { makeSyncHandler } from './endpoints/syncEndpoint.js'
 import { createWebhookHandler } from './endpoints/webhook.js'
 import { primaryLocation } from './lib/locationUtils.js'
@@ -18,6 +20,7 @@ export type {
   BeforeCheckoutContext,
   Cart,
   CartItem,
+  Customer,
   Order,
   OrderLineItem,
   SquarePayment,
@@ -38,6 +41,7 @@ export const payloadPluginSquare =
     config.collections.push(
       createSquareCatalogItemsCollection(mediaCollectionSlug),
       Orders,
+      Customers,
       SquarePayments,
       SquareWebhookEvents,
     )
@@ -73,6 +77,14 @@ export const payloadPluginSquare =
       method: 'get',
       handler: inventoryStreamHandler,
     })
+
+    if (pluginOptions.loyalty) {
+      config.endpoints.push({
+        path: '/square/loyalty/balance',
+        method: 'get',
+        handler: createLoyaltyBalanceHandler(pluginOptions),
+      })
+    }
 
     if (endpointOptions.sync !== false) {
       config.endpoints.push({
