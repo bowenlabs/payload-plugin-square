@@ -8,6 +8,18 @@ import { useAuth } from '../_auth/AuthContext.js'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+interface Subscription {
+  id: string
+  squareSubscriptionId: string
+  status: string
+  planName?: string
+  cadence?: string
+  priceAmount?: number
+  currency: string
+  startDate?: string
+  chargedThroughDate?: string
+}
+
 interface RewardTier {
   id: string
   name: string
@@ -273,6 +285,7 @@ export default function AccountPage() {
   const [loyaltyError, setLoyaltyError] = useState<string | null>(null)
   const [orders, setOrders] = useState<Order[]>([])
   const [ordersLoading, setOrdersLoading] = useState(true)
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
 
   const fetchData = useCallback(async () => {
     // Loyalty balance
@@ -301,6 +314,17 @@ export default function AccountPage() {
       }
     } finally {
       setOrdersLoading(false)
+    }
+
+    // Subscriptions
+    try {
+      const res = await fetch('/api/square/subscriptions', { credentials: 'include' })
+      if (res.ok) {
+        const data = (await res.json()) as { subscriptions: Subscription[] }
+        setSubscriptions(data.subscriptions)
+      }
+    } catch {
+      // subscriptions endpoint may not be enabled — non-fatal
     }
   }, [])
 
@@ -343,6 +367,78 @@ export default function AccountPage() {
       ) : loyalty ? (
         <LoyaltyCard data={loyalty} />
       ) : null}
+
+      {/* Subscriptions */}
+      {subscriptions.length > 0 && (
+        <div style={{ marginBottom: 40 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>Subscriptions</h2>
+            <Link href="/subscriptions" style={{ fontSize: 13, color: '#6b7280', textDecoration: 'none' }}>
+              Browse plans →
+            </Link>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {subscriptions.map((sub) => {
+              const statusStyles: Record<string, { background: string; color: string }> = {
+                ACTIVE:      { background: '#f0fdf4', color: '#166534' },
+                PENDING:     { background: '#fffbeb', color: '#92400e' },
+                PAUSED:      { background: '#eff6ff', color: '#1d4ed8' },
+                CANCELED:    { background: '#f9fafb', color: '#6b7280' },
+                DEACTIVATED: { background: '#f9fafb', color: '#6b7280' },
+              }
+              const style = statusStyles[sub.status] ?? statusStyles.PENDING!
+              return (
+                <div
+                  key={sub.id}
+                  style={{
+                    background: '#fff',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 10,
+                    padding: '14px 16px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                  }}
+                >
+                  <div style={{ flex: 1 }}>
+                    <span style={{ fontWeight: 600, fontSize: 14 }}>
+                      {sub.planName ?? 'Subscription Plan'}
+                    </span>
+                    {sub.cadence && (
+                      <span style={{ color: '#9ca3af', fontSize: 13, marginLeft: 8 }}>
+                        · {sub.cadence.toLowerCase()}
+                      </span>
+                    )}
+                    {sub.chargedThroughDate && (
+                      <p style={{ margin: '4px 0 0', fontSize: 12, color: '#9ca3af' }}>
+                        Paid through{' '}
+                        {new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(sub.chargedThroughDate))}
+                      </p>
+                    )}
+                  </div>
+                  {sub.priceAmount !== undefined && (
+                    <span style={{ fontWeight: 700, fontSize: 15 }}>
+                      {formatPrice(sub.priceAmount, sub.currency)}
+                    </span>
+                  )}
+                  <span
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      padding: '3px 10px',
+                      borderRadius: 99,
+                      ...style,
+                    }}
+                  >
+                    {sub.status.charAt(0) + sub.status.slice(1).toLowerCase()}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Orders */}
       <div>

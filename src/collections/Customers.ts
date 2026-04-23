@@ -10,7 +10,9 @@ export const Customers: CollectionConfig = {
       'Square customer records. Created automatically at checkout for guests and logged-in users. Loyalty balance is synced from Square via webhook.',
   },
   access: {
-    // Any authenticated user can read customer records — admin staff need full visibility.
+    // All authenticated users can read customer records — needed for admin panel visibility.
+    // ⚠ If end-users have Payload accounts, tighten this to prevent users from reading
+    // each other's email/loyalty data via GET /api/customers.
     read: ({ req }) => !!req.user,
     create: () => false,
     update: () => false,

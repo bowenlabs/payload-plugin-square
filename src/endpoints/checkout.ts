@@ -35,6 +35,49 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       )
     }
 
+    // ── Shipping validation ──────────────────────────────────────────────────
+    const { shippingAddress, shippingRateId } = cart
+    let resolvedShippingAmount = 0
+    let resolvedShippingRate: import('../types.js').ShippingRate | undefined
+
+    if (shippingAddress) {
+      const requiredFields: (keyof typeof shippingAddress)[] = [
+        'firstName', 'lastName', 'address1', 'city', 'state', 'zip',
+      ]
+      for (const field of requiredFields) {
+        if (!shippingAddress[field]) {
+          return Response.json(
+            { error: `shippingAddress.${field} is required` },
+            { status: 400 },
+          )
+        }
+      }
+
+      if (options.shipping) {
+        const subtotal = cart.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0)
+        const qualifiesForFree =
+          options.shipping.freeShippingThreshold !== undefined &&
+          subtotal >= options.shipping.freeShippingThreshold
+
+        if (!qualifiesForFree) {
+          if (!shippingRateId) {
+            return Response.json(
+              { error: 'shippingRateId is required when a shipping address is provided' },
+              { status: 400 },
+            )
+          }
+          resolvedShippingRate = options.shipping.rates.find((r) => r.id === shippingRateId)
+          if (!resolvedShippingRate) {
+            return Response.json(
+              { error: `Unknown shippingRateId: ${shippingRateId}` },
+              { status: 400 },
+            )
+          }
+          resolvedShippingAmount = resolvedShippingRate.amount
+        }
+      }
+    }
+
     const variationIds = cart.items.map((i) => i.variationId).filter(Boolean) as string[]
     if (variationIds.length !== cart.items.length) {
       return Response.json(
@@ -222,6 +265,44 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
     // ── Step 4: Create Square Order ─────────────────────────────────────────
     let squareOrder: NonNullable<Awaited<ReturnType<typeof client.orders.create>>['order']>
     try {
+      const fulfillments: import('square').Fulfillment[] = shippingAddress
+        ? [
+            {
+              type: 'SHIPMENT',
+              state: 'PROPOSED',
+              shipmentDetails: {
+                recipient: {
+                  displayName: `${shippingAddress.firstName} ${shippingAddress.lastName}`,
+                  emailAddress: customerEmail,
+                  phoneNumber: shippingAddress.phone,
+                  address: {
+                    addressLine1: shippingAddress.address1,
+                    addressLine2: shippingAddress.address2,
+                    locality: shippingAddress.city,
+                    administrativeDistrictLevel1: shippingAddress.state,
+                    postalCode: shippingAddress.zip,
+                    country: (shippingAddress.country ?? 'US') as import('square').Country,
+                  },
+                },
+              },
+            },
+          ]
+        : []
+
+      const serviceCharges: import('square').OrderServiceCharge[] =
+        resolvedShippingAmount > 0
+          ? [
+              {
+                name: resolvedShippingRate?.name ?? 'Shipping',
+                amountMoney: {
+                  amount: BigInt(resolvedShippingAmount),
+                  currency: 'USD',
+                },
+                calculationPhase: 'TOTAL_PHASE',
+              },
+            ]
+          : []
+
       const orderResponse = await client.orders.create({
         idempotencyKey: crypto.randomUUID(),
         order: {
@@ -230,6 +311,8 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
             catalogObjectId: item.variationId,
             quantity: String(item.quantity),
           })),
+          ...(fulfillments.length > 0 ? { fulfillments } : {}),
+          ...(serviceCharges.length > 0 ? { serviceCharges } : {}),
         },
       })
       if (!orderResponse.order) {
@@ -327,6 +410,8 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       }
     })
 
+    const squareFulfillmentUid = squareOrder.fulfillments?.[0]?.uid
+
     let payloadOrder: Order
     try {
       payloadOrder = (await req.payload.create({
@@ -344,6 +429,24 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
           guestEmail: customerEmail ?? undefined,
           squareCustomer: customerId ?? undefined,
           lineItems: enrichedLineItems,
+          ...(shippingAddress
+            ? {
+                shippingAddress: {
+                  firstName: shippingAddress.firstName,
+                  lastName: shippingAddress.lastName,
+                  address1: shippingAddress.address1,
+                  address2: shippingAddress.address2 ?? undefined,
+                  city: shippingAddress.city,
+                  state: shippingAddress.state,
+                  zip: shippingAddress.zip,
+                  country: shippingAddress.country ?? 'US',
+                  phone: shippingAddress.phone ?? undefined,
+                },
+                shippingAmount: resolvedShippingAmount,
+                fulfillmentStatus: 'pending',
+                squareFulfillmentUid: squareFulfillmentUid ?? undefined,
+              }
+            : {}),
         },
         overrideAccess: true,
       })) as unknown as Order
@@ -429,6 +532,21 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
               `<tr><td>${li.productName}</td><td style="text-align:center">${li.quantity}</td><td style="text-align:right">$${(li.totalPrice / 100).toFixed(2)}</td></tr>`,
           )
           .join('')
+
+        const shippingRowHtml =
+          resolvedShippingAmount > 0
+            ? `<tr><td colspan="2" style="color:#6b7280">Shipping (${resolvedShippingRate?.name ?? ''})</td><td style="text-align:right;color:#6b7280">$${(resolvedShippingAmount / 100).toFixed(2)}</td></tr>`
+            : ''
+
+        const shippingAddressHtml = shippingAddress
+          ? `<p style="margin:16px 0 0">
+               <strong>Ship to:</strong><br>
+               ${shippingAddress.firstName} ${shippingAddress.lastName}<br>
+               ${shippingAddress.address1}${shippingAddress.address2 ? `, ${shippingAddress.address2}` : ''}<br>
+               ${shippingAddress.city}, ${shippingAddress.state} ${shippingAddress.zip}
+             </p>`
+          : ''
+
         await req.payload.sendEmail({
           to: customerEmail,
           subject: `Order ${payloadOrder.orderNumber} confirmed`,
@@ -439,9 +557,11 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
               <thead><tr><th style="text-align:left">Item</th><th>Qty</th><th style="text-align:right">Total</th></tr></thead>
               <tbody>${lineItemsHtml}</tbody>
               <tfoot>
+                ${shippingRowHtml}
                 <tr><td colspan="2"><strong>Total</strong></td><td style="text-align:right"><strong>$${(Number(squareOrder.totalMoney?.amount ?? 0) / 100).toFixed(2)}</strong></td></tr>
               </tfoot>
             </table>
+            ${shippingAddressHtml}
           `,
         })
       } catch (emailErr) {

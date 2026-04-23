@@ -8,8 +8,11 @@ export const Orders: CollectionConfig = {
     group: 'Square',
   },
   access: {
-    // Any authenticated user can read orders — admin staff need to see all records.
-    // Row-level filtering (customers seeing only their own) is left to the application layer.
+    // All authenticated users can read orders — needed for admin panel visibility.
+    // ⚠ If end-users have Payload accounts (e.g. a storefront login), tighten this in your
+    // app config to add row-level filtering, otherwise users can read each other's orders
+    // via GET /api/orders. Example:
+    //   read: ({ req }) => req.user?.roles?.includes('admin') || { user: { equals: req.user?.id } }
     read: ({ req }) => !!req.user,
     create: () => false,
     update: () => false,
@@ -108,6 +111,59 @@ export const Orders: CollectionConfig = {
         },
         { name: 'squareCatalogObjectId', type: 'text' },
       ],
+    },
+    {
+      name: 'shippingAddress',
+      type: 'group',
+      admin: { description: 'Shipping destination for physical orders' },
+      fields: [
+        { name: 'firstName', type: 'text' },
+        { name: 'lastName', type: 'text' },
+        { name: 'address1', type: 'text' },
+        { name: 'address2', type: 'text' },
+        { name: 'city', type: 'text' },
+        { name: 'state', type: 'text' },
+        { name: 'zip', type: 'text' },
+        { name: 'country', type: 'text', defaultValue: 'US' },
+        { name: 'phone', type: 'text' },
+      ],
+    },
+    {
+      name: 'shippingAmount',
+      type: 'number',
+      admin: { description: 'Shipping charge in cents' },
+    },
+    {
+      name: 'fulfillmentStatus',
+      type: 'select',
+      options: [
+        { label: 'Pending', value: 'pending' },
+        { label: 'Shipped', value: 'shipped' },
+        { label: 'Delivered', value: 'delivered' },
+        { label: 'Failed', value: 'failed' },
+      ],
+      admin: { description: 'Synced from Square order.fulfillment.updated webhook' },
+    },
+    {
+      name: 'shippingCarrier',
+      type: 'text',
+      admin: { description: 'Carrier name as reported by Square (e.g. UPS, USPS)' },
+    },
+    {
+      name: 'trackingNumber',
+      type: 'text',
+      admin: { description: 'Carrier tracking number' },
+    },
+    {
+      name: 'trackingUrl',
+      type: 'text',
+      admin: { description: 'Direct link to carrier tracking page' },
+    },
+    {
+      name: 'squareFulfillmentUid',
+      type: 'text',
+      index: true,
+      admin: { description: 'Square fulfillment UID — used to match order.fulfillment.updated events' },
     },
   ],
 }

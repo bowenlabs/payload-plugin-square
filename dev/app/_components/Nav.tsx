@@ -70,6 +70,13 @@ export function Nav() {
         )}
 
         <Link
+          href="/subscriptions"
+          style={{ fontSize: 14, textDecoration: 'none', color: '#374151' }}
+        >
+          Plans
+        </Link>
+
+        <Link
           href="/cart"
           style={{
             display: 'flex',

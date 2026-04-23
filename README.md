@@ -4,13 +4,15 @@ A [Payload CMS](https://payloadcms.com) plugin that integrates [Square](https://
 
 ## Features
 
-- **Catalog sync** — pulls Square catalog items (with images) into a local Payload collection; delta sync only fetches items changed since the last run
+- **Catalog sync** — pulls Square catalog items (with images) into a Payload collection; delta sync only fetches items changed since the last run
 - **Real-time inventory** — Square webhooks update stock counts instantly via Server-Sent Events; all open browser tabs reflect changes without a refresh
 - **Checkout** — server-side price verification, live inventory gating, Square Order + Payment creation, and Payload order/audit records in one endpoint
+- **Shipping** — configurable rates with free-shipping threshold, SHIPMENT fulfillment on Square Orders, tracking number sync via `order.fulfillment.updated` webhook
 - **Customer records** — creates or finds a `customers` record at checkout for both logged-in users and guests; links orders and loyalty data to the customer
 - **Square Loyalty** — opt-in loyalty account creation, point accrual, reward redemption, and live balance sync via webhooks; includes a `GET /api/square/loyalty/balance` endpoint
 - **Guest order emails** — sends an HTML order confirmation email after checkout (requires Payload email adapter)
-- **Webhook handling** — verifies HMAC-SHA256 signatures, deduplicates replayed events, and handles `payment.updated`, `order.updated`, `inventory.count.updated`, `catalog.version.updated`, `refund.updated`, and `loyalty.account.updated`
+- **Square Subscriptions** — save card on file, create subscriptions from Square catalog plans, and manage them (cancel/pause/resume) via API endpoints; status synced via `subscription.updated` webhook
+- **Webhook handling** — verifies HMAC-SHA256 signatures, deduplicates replayed events, handles `payment.updated`, `order.updated`, `inventory.count.updated`, `catalog.version.updated`, `refund.updated`, `loyalty.account.updated`, `order.fulfillment.updated`, `subscription.updated`, and `subscription.created`
 - **Scheduled sync** — optional cron-based catalog sync via Payload's Jobs Queue (e.g. `syncSchedule: '0 * * * *'` for hourly)
 - **Multi-location** — pass an array to `locationId`; the first entry is the primary location used for payments
 - **Plugin hooks** — `beforeCheckout`, `afterCheckout`, `onWebhookReceived`, `onSyncComplete` for custom business logic
@@ -34,10 +36,19 @@ export default buildConfig({
       locationId: process.env.SQUARE_LOCATION_ID!,
       environment: 'sandbox', // or 'production'
       webhookSecret: process.env.SQUARE_WEBHOOK_SECRET,
+      mediaCollectionSlug: 'square-media', // store catalog images separately (recommended)
       syncOnInit: true,               // sync catalog on server start
       syncSchedule: '0 * * * *',      // optional: also sync hourly via Jobs Queue
       loyalty: {                       // optional: enable Square Loyalty
         programId: 'main',             // Square loyalty program ID (default: 'main')
+      },
+      subscriptions: {},               // optional: enable Square Subscriptions
+      shipping: {                      // optional: enable shipping
+        rates: [
+          { id: 'standard', name: 'Standard Shipping', amount: 599, estimatedDays: 5 },
+          { id: 'express',  name: 'Express Shipping',  amount: 1499, estimatedDays: 2 },
+        ],
+        freeShippingThreshold: 5000,   // free shipping on orders ≥ $50
       },
     }),
   ],
@@ -66,6 +77,12 @@ All collections are grouped under **Square** in the Payload admin sidebar.
 | `customers` | Customers | Customer records linked to Payload users and Square loyalty accounts. |
 | `payments` | Payments | Read-only. Raw Square payment responses for reconciliation. |
 | `square-webhook-events` | Webhook Events | Read-only. Processed webhook event IDs for replay protection. |
+| `square-subscriptions` | Subscriptions | Active subscriptions. Created via the subscribe endpoint; status synced via webhook. |
+
+> **Access control note:** All plugin collections default to `read: ({ req }) => !!req.user` — any authenticated user can read all records via the Payload REST API. If your storefront gives end-users Payload accounts, override the `read` access function on `orders`, `customers`, and `square-subscriptions` to add row-level filtering. Example for orders:
+> ```ts
+> read: ({ req }) => req.user?.roles?.includes('admin') || { user: { equals: req.user?.id } }
+> ```
 
 ## API Endpoints
 
@@ -76,6 +93,13 @@ All collections are grouped under **Square** in the Payload admin sidebar.
 | `GET` | `/api/square/inventory-stream` | — | SSE stream for real-time inventory/catalog updates |
 | `POST` | `/api/square/sync` | Required | Manually trigger a catalog sync |
 | `GET` | `/api/square/loyalty/balance` | Required | Current loyalty balance, program tiers, and redeemable rewards |
+| `GET` | `/api/square/shipping/rates` | — | Available shipping rates; pass `?cartTotal=N` (cents) to apply free-shipping threshold |
+| `GET` | `/api/square/subscriptions/plans` | — | Square Subscription Plan catalog items |
+| `POST` | `/api/square/subscriptions/subscribe` | Optional | Save card on file and create a subscription |
+| `GET` | `/api/square/subscriptions` | Required | List the authenticated user's subscriptions |
+| `POST` | `/api/square/subscriptions/cancel` | Required | Cancel a subscription |
+| `POST` | `/api/square/subscriptions/pause` | Required | Pause a subscription |
+| `POST` | `/api/square/subscriptions/resume` | Required | Resume a paused subscription |
 
 ### Checkout request body
 
@@ -92,7 +116,29 @@ All collections are grouped under **Square** in the Payload admin sidebar.
     guestEmail?: string                 // triggers order confirmation email
     loyaltyOptIn?: boolean              // set true to create/find loyalty account and accrue points
     loyaltyRewardDefinitionId?: string  // Square reward definition ID to redeem at checkout
+    shippingAddress?: {                 // required for physical orders
+      firstName: string
+      lastName: string
+      address1: string
+      address2?: string
+      city: string
+      state: string
+      zip: string
+      country?: string                  // ISO 3166-1 alpha-2, default 'US'
+      phone?: string
+    }
+    shippingRateId?: string             // ID from GET /api/square/shipping/rates
   }
+}
+```
+
+### Shipping rates response
+
+```ts
+{
+  rates: { id, name, amount, estimatedDays? }[]   // amount in cents (0 when free)
+  freeShippingThreshold: number | undefined       // configured threshold in cents
+  qualifiesForFree: boolean                       // true when cartTotal >= threshold
 }
 ```
 
@@ -123,10 +169,13 @@ All collections are grouped under **Square** in the Payload admin sidebar.
 |---|---|
 | `payment.updated` | Sync order status on payment completion/failure |
 | `order.updated` | Sync order status on Square order state changes |
+| `order.fulfillment.updated` | Sync tracking number, carrier, and fulfillment status |
 | `inventory.count.updated` | Update stock counts in real-time |
 | `catalog.version.updated` | Auto-sync catalog when items change in Square |
 | `refund.updated` | Mark orders as refunded/partially refunded |
 | `loyalty.account.updated` | Sync loyalty point balance to customer records |
+| `subscription.updated` | Sync subscription status and billing date |
+| `subscription.created` | Sync newly created subscriptions |
 
 4. Copy the **Signature key** to `SQUARE_WEBHOOK_SECRET`
 
@@ -159,6 +208,17 @@ type PayloadPluginSquareConfig = {
   loyalty?: {
     programId?: string                      // default: 'main'
   }
+  shipping?: {
+    rates: {
+      id: string
+      name: string
+      amount: number                        // cents
+      estimatedDays?: number
+    }[]
+    freeShippingThreshold?: number          // cents; orders at or above this get free shipping
+  }
+  /** Enable Square Subscriptions endpoints. Omit to disable. */
+  subscriptions?: {}
   hooks?: {
     beforeCheckout?: (ctx: BeforeCheckoutContext) => Promise<void>
     afterCheckout?: (ctx: AfterCheckoutContext) => Promise<void>
@@ -229,3 +289,99 @@ pnpm test:e2e   # end-to-end tests (Playwright)
 ```
 
 > **Note:** Delete `dev/dev.db` whenever collection slugs change — SQLite will recreate the schema on next start.
+
+### Sandbox test credentials
+
+**Payload admin:** `dev@payloadcms.com` / `test`
+
+**Square test cards** (any future expiry date, any CVV, any postal code):
+
+| Network | Number |
+|---|---|
+| Visa | `4111 1111 1111 1111` |
+| Mastercard | `5105 1051 0510 5100` |
+| American Express | `3714 4963 5398 431` |
+| Discover | `6011 1111 1111 1117` |
+
+For nonce-based testing (bypass the card form), see [Square Sandbox test values](https://developer.squareup.com/docs/devtools/sandbox/payments).
+
+## Security
+
+### Collection access control
+
+All plugin collections default to `read: ({ req }) => !!req.user`, which allows any authenticated user to read all records via `GET /api/orders`, `GET /api/customers`, etc. This is fine for purely admin-facing stores, but **if your storefront gives end-users Payload accounts, you must tighten these to add row-level filtering** to prevent users from reading each other's data.
+
+Override the collection's `read` access in your Payload config — for example, restricting orders to the owner or an admin:
+
+```ts
+// In your payload.config.ts, after building the config:
+const config = buildConfig({
+  plugins: [
+    payloadPluginSquare({ ... }),
+  ],
+})
+
+// Or override per-collection via an afterPlugin hook or by manually patching config.collections:
+// orders: read: ({ req }) => req.user?.roles?.includes('admin') || { user: { equals: req.user?.id } }
+// customers: read: ({ req }) => req.user?.roles?.includes('admin') || { user: { equals: req.user?.id } }
+// square-subscriptions: read: ({ req }) => req.user?.roles?.includes('admin') || { customer: { user: { equals: req.user?.id } } }
+```
+
+### Webhook replay protection
+
+Webhook deduplication uses a two-layer approach:
+1. **Application check** — queries the `square-webhook-events` collection before processing.
+2. **Database unique constraint** — the `eventId` field has `unique: true`. If two concurrent deliveries of the same event both pass the application check, whichever creates the record second gets a unique constraint violation, which the handler catches and returns 200 for (Square stops retrying). This eliminates the TOCTOU race condition.
+
+### Card data
+
+Card numbers and CVVs are never stored in Payload. Square's Web Payments SDK tokenizes the card in the browser; only the single-use nonce reaches your server. For subscriptions, the nonce is converted to a card-on-file in Square's vault via `POST /v2/cards` and only the card ID is stored.
+
+## Payment Methods & Addresses — Best Practices
+
+**Card data is never stored in Payload.** Square's Web Payments SDK tokenizes the card in the browser and returns a single-use nonce. Only that nonce is sent to your server, where it is passed to Square's Payments API. Square handles PCI-DSS scope; your database never touches card numbers or CVVs.
+
+**What Payload stores:**
+
+| Data | Where | Notes |
+|---|---|---|
+| Square Customer ID | `customers.squareCustomerId` | Links to Square's customer record |
+| Loyalty Account ID | `customers.loyaltyAccountId` | Links to Square's loyalty record |
+| Shipping address | `orders.shippingAddress` | Stored per-order for fulfillment |
+| Order totals & line items | `orders` | For your own records |
+| Raw payment response | `payments.rawResponse` | Audit trail only |
+
+**Saved payment methods:** Square stores cards-on-file in its own vault. To offer "pay with saved card," retrieve the customer's cards via the [Square Customers API](https://developer.squareup.com/reference/square/customers-api) and pass the card ID as `sourceId` to checkout. No card data ever lives in Payload.
+
+**Shipping addresses:** Stored on the `orders` record (one address per order). If you want a customer address book, store address objects linked to the `customers` collection and let users select one at checkout.
+
+## Reference Documentation
+
+### Square
+| Topic | Link |
+|---|---|
+| API overview | [developer.squareup.com/docs](https://developer.squareup.com/docs) |
+| Orders API | [Create orders](https://developer.squareup.com/reference/square/orders-api/create-order) |
+| Payments API | [Create payments](https://developer.squareup.com/reference/square/payments-api/create-payment) |
+| Catalog API | [List catalog](https://developer.squareup.com/reference/square/catalog-api/list-catalog) |
+| Inventory API | [Batch retrieve counts](https://developer.squareup.com/reference/square/inventory-api/batch-retrieve-inventory-counts) |
+| Customers API | [Search customers](https://developer.squareup.com/reference/square/customers-api/search-customers) |
+| Loyalty API | [Loyalty overview](https://developer.squareup.com/docs/loyalty-api/overview) |
+| Fulfillments | [Order fulfillments](https://developer.squareup.com/docs/orders-api/create-orders#fulfillments) |
+| Webhooks | [Webhook overview](https://developer.squareup.com/docs/webhooks/overview) |
+| Web Payments SDK | [Getting started](https://developer.squareup.com/docs/web-payments/overview) |
+| Sandbox payments | [Test card numbers & nonces](https://developer.squareup.com/docs/devtools/sandbox/payments) |
+| Node.js SDK | [square npm package](https://www.npmjs.com/package/square) |
+
+### Payload CMS
+| Topic | Link |
+|---|---|
+| Getting started | [payloadcms.com/docs](https://payloadcms.com/docs) |
+| Collections | [Collection config](https://payloadcms.com/docs/configuration/collections) |
+| Hooks | [Collection hooks](https://payloadcms.com/docs/hooks/collections) |
+| Access control | [Access control](https://payloadcms.com/docs/access-control/overview) |
+| Local API | [Local API](https://payloadcms.com/docs/local-api/overview) |
+| Custom endpoints | [REST endpoints](https://payloadcms.com/docs/rest-api/overview) |
+| Jobs queue | [Background jobs](https://payloadcms.com/docs/jobs-queue/overview) |
+| Email | [Email adapter](https://payloadcms.com/docs/email/overview) |
+| Plugin development | [Building plugins](https://payloadcms.com/docs/plugins/build-your-own) |

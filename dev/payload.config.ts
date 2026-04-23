@@ -35,6 +35,16 @@ export default buildConfig({
         staticDir: path.resolve(dirname, 'media'),
       },
     },
+    {
+      slug: 'square-media',
+      labels: { singular: 'Image', plural: 'Images' },
+      admin: { group: 'Square', useAsTitle: 'filename', description: 'Read-only. Images are managed by Square and synced via catalog sync.' },
+      access: { read: () => true, create: () => false, update: () => false, delete: () => false },
+      fields: [],
+      upload: {
+        staticDir: path.resolve(dirname, 'square-media'),
+      },
+    },
   ],
   db: sqliteAdapter({
     client: {
@@ -52,7 +62,16 @@ export default buildConfig({
       locationId: process.env.SQUARE_LOCATION_ID || '',
       environment: (process.env.SQUARE_ENVIRONMENT as 'sandbox' | 'production') || 'sandbox',
       webhookSecret: process.env.SQUARE_WEBHOOK_SECRET,
+      mediaCollectionSlug: 'square-media',
       syncOnInit: true,
+      shipping: {
+        rates: [
+          { id: 'standard', name: 'Standard Shipping', amount: 599, estimatedDays: 5 },
+          { id: 'express', name: 'Express Shipping', amount: 1499, estimatedDays: 2 },
+        ],
+        freeShippingThreshold: 5000,
+      },
+      subscriptions: {},
     }),
   ],
   secret: process.env.PAYLOAD_SECRET || 'test-secret_key',

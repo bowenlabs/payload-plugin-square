@@ -12,6 +12,17 @@ interface LineItem {
   totalPrice: number
 }
 
+interface ShippingAddress {
+  firstName?: string
+  lastName?: string
+  address1?: string
+  address2?: string
+  city?: string
+  state?: string
+  zip?: string
+  country?: string
+}
+
 interface Order {
   id: string
   orderNumber: string
@@ -22,6 +33,12 @@ interface Order {
   currency: string
   lineItems: LineItem[]
   guestEmail?: string
+  shippingAddress?: ShippingAddress
+  shippingAmount?: number
+  shippingCarrier?: string
+  trackingNumber?: string
+  trackingUrl?: string
+  fulfillmentStatus?: 'pending' | 'shipped' | 'delivered' | 'failed'
 }
 
 function formatPrice(cents: number, currency = 'USD') {
@@ -161,6 +178,12 @@ export default function OrderConfirmationPage() {
               </div>
             </>
           )}
+          {order.shippingAmount !== undefined && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', color: '#6b7280' }}>
+              <span>Shipping</span>
+              <span>{order.shippingAmount === 0 ? 'Free' : formatPrice(order.shippingAmount, order.currency)}</span>
+            </div>
+          )}
           <div
             style={{
               display: 'flex',
@@ -174,6 +197,93 @@ export default function OrderConfirmationPage() {
           </div>
         </div>
       </div>
+
+      {/* Shipping info */}
+      {order.shippingAddress?.address1 && (
+        <div
+          style={{
+            background: '#fff',
+            borderRadius: 8,
+            boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+            overflow: 'hidden',
+            marginBottom: 16,
+          }}
+        >
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid #f3f4f6', fontWeight: 600 }}>
+            Shipping
+          </div>
+          <div style={{ padding: '16px 20px', fontSize: 14 }}>
+            <div style={{ marginBottom: 12 }}>
+              <p style={{ margin: '0 0 2px', color: '#6b7280', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Deliver to</p>
+              <p style={{ margin: 0 }}>
+                {order.shippingAddress.firstName} {order.shippingAddress.lastName}
+              </p>
+              <p style={{ margin: 0, color: '#374151' }}>
+                {order.shippingAddress.address1}
+                {order.shippingAddress.address2 ? `, ${order.shippingAddress.address2}` : ''}
+              </p>
+              <p style={{ margin: 0, color: '#374151' }}>
+                {order.shippingAddress.city}, {order.shippingAddress.state} {order.shippingAddress.zip}
+              </p>
+            </div>
+
+            {/* Fulfillment status badge */}
+            {order.fulfillmentStatus && (
+              <div style={{ marginBottom: order.trackingNumber ? 12 : 0 }}>
+                <p style={{ margin: '0 0 6px', color: '#6b7280', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Status</p>
+                <span
+                  style={{
+                    display: 'inline-block',
+                    padding: '3px 10px',
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    background:
+                      order.fulfillmentStatus === 'delivered'
+                        ? '#dcfce7'
+                        : order.fulfillmentStatus === 'shipped'
+                          ? '#dbeafe'
+                          : order.fulfillmentStatus === 'failed'
+                            ? '#fee2e2'
+                            : '#f3f4f6',
+                    color:
+                      order.fulfillmentStatus === 'delivered'
+                        ? '#166534'
+                        : order.fulfillmentStatus === 'shipped'
+                          ? '#1d4ed8'
+                          : order.fulfillmentStatus === 'failed'
+                            ? '#b91c1c'
+                            : '#374151',
+                  }}
+                >
+                  {order.fulfillmentStatus.charAt(0).toUpperCase() + order.fulfillmentStatus.slice(1)}
+                </span>
+              </div>
+            )}
+
+            {/* Tracking info */}
+            {order.trackingNumber && (
+              <div>
+                <p style={{ margin: '0 0 4px', color: '#6b7280', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Tracking{order.shippingCarrier ? ` · ${order.shippingCarrier}` : ''}
+                </p>
+                {order.trackingUrl ? (
+                  <a
+                    href={order.trackingUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: '#111', fontWeight: 500 }}
+                  >
+                    {order.trackingNumber}
+                  </a>
+                ) : (
+                  <span style={{ fontWeight: 500 }}>{order.trackingNumber}</span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <Link
         href="/"

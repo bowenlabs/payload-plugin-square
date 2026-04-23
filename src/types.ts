@@ -36,12 +36,54 @@ export type PayloadPluginSquareConfig = {
     /** Square loyalty program ID. Defaults to 'main' (the merchant's primary program). */
     programId?: string
   }
+  /**
+   * Enable shipping support. Omit to disable.
+   * Adds a SHIPMENT fulfillment to Square Orders and exposes GET /api/square/shipping/rates.
+   * When configured, cart submissions may include shippingAddress and shippingRateId.
+   */
+  shipping?: {
+    /** Available shipping options presented to the customer. */
+    rates: ShippingRate[]
+    /**
+     * Cart subtotal in cents at or above which shipping is free.
+     * When a cart qualifies, rates are returned with amount overridden to 0.
+     */
+    freeShippingThreshold?: number
+  }
+  /**
+   * Enable Square Subscriptions. Omit to disable.
+   * Exposes endpoints for listing plans, subscribing, and managing subscriptions.
+   * Requires Square Subscriptions to be configured in the Square Dashboard.
+   */
+  subscriptions?: Record<string, never>
   hooks?: {
     beforeCheckout?: (ctx: BeforeCheckoutContext) => Promise<void>
     afterCheckout?: (ctx: AfterCheckoutContext) => Promise<void>
     onWebhookReceived?: (ctx: WebhookContext) => Promise<void>
     onSyncComplete?: (ctx: SyncContext) => Promise<void>
   }
+}
+
+export interface ShippingAddress {
+  firstName: string
+  lastName: string
+  address1: string
+  address2?: string
+  city: string
+  state: string
+  zip: string
+  /** ISO 3166-1 alpha-2 country code, e.g. 'US'. Defaults to 'US'. */
+  country?: string
+  phone?: string
+}
+
+export interface ShippingRate {
+  id: string
+  name: string
+  /** Shipping cost in cents */
+  amount: number
+  /** Estimated delivery window shown to the customer */
+  estimatedDays?: number
 }
 
 export interface Cart {
@@ -59,6 +101,13 @@ export interface Cart {
    * Only honoured when loyaltyOptIn is true.
    */
   loyaltyRewardDefinitionId?: string
+  /** Shipping destination. Required when the merchant has shipping configured. */
+  shippingAddress?: ShippingAddress
+  /**
+   * ID of a shipping rate from GET /api/square/shipping/rates.
+   * Required when shippingAddress is provided and the order doesn't qualify for free shipping.
+   */
+  shippingRateId?: string
 }
 
 export interface CartItem {
@@ -82,6 +131,13 @@ export interface Order {
   user?: string
   guestEmail?: string
   lineItems: OrderLineItem[]
+  shippingAddress?: ShippingAddress
+  shippingAmount?: number
+  shippingCarrier?: string
+  trackingNumber?: string
+  trackingUrl?: string
+  fulfillmentStatus?: 'pending' | 'shipped' | 'delivered' | 'failed'
+  squareFulfillmentUid?: string
 }
 
 export interface OrderLineItem {

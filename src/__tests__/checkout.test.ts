@@ -173,6 +173,143 @@ describe('createCheckoutHandler — price verification', () => {
   })
 })
 
+describe('createCheckoutHandler — shipping validation', () => {
+  it('returns 400 when shippingAddress is missing required field', async () => {
+    const handler = createCheckoutHandler({
+      ...baseOptions,
+      shipping: { rates: [{ id: 'standard', name: 'Standard', amount: 599 }] },
+    })
+    const res = await handler(
+      makeReq({
+        sourceId: 'tok_1',
+        cart: {
+          items: [{ variationId: 'v1', quantity: 1, unitPrice: 100 }],
+          shippingAddress: { firstName: 'Jane', lastName: 'Doe', address1: '1 Main St' },
+          // city/state/zip missing
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      }) as any,
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/shippingAddress\.city/)
+  })
+
+  it('returns 400 when shippingRateId is missing and shipping is configured', async () => {
+    const handler = createCheckoutHandler({
+      ...baseOptions,
+      shipping: { rates: [{ id: 'standard', name: 'Standard', amount: 599 }] },
+    })
+    const res = await handler(
+      makeReq({
+        sourceId: 'tok_1',
+        cart: {
+          items: [{ variationId: 'v1', quantity: 1, unitPrice: 100 }],
+          shippingAddress: {
+            firstName: 'Jane', lastName: 'Doe', address1: '1 Main St',
+            city: 'Portland', state: 'OR', zip: '97201',
+          },
+          // shippingRateId omitted
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      }) as any,
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/shippingRateId/)
+  })
+
+  it('returns 400 when shippingRateId does not match a configured rate', async () => {
+    const handler = createCheckoutHandler({
+      ...baseOptions,
+      shipping: { rates: [{ id: 'standard', name: 'Standard', amount: 599 }] },
+    })
+    const res = await handler(
+      makeReq({
+        sourceId: 'tok_1',
+        cart: {
+          items: [{ variationId: 'v1', quantity: 1, unitPrice: 100 }],
+          shippingAddress: {
+            firstName: 'Jane', lastName: 'Doe', address1: '1 Main St',
+            city: 'Portland', state: 'OR', zip: '97201',
+          },
+          shippingRateId: 'nonexistent-rate',
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      }) as any,
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/Unknown shippingRateId/)
+  })
+
+  it('skips shippingRateId requirement when cart qualifies for free shipping', async () => {
+    const { createSquareClient } = await import('../lib/squareClient.js')
+    vi.mocked(createSquareClient).mockReturnValueOnce({
+      catalog: {
+        batchGet: vi.fn().mockResolvedValue({
+          objects: [
+            {
+              id: 'var-1',
+              type: 'ITEM_VARIATION',
+              itemVariationData: { name: 'Widget', priceMoney: { amount: BigInt(5000) } },
+            },
+          ],
+        }),
+      },
+      inventory: {
+        batchGetCounts: vi.fn().mockReturnValue({
+          [Symbol.asyncIterator]: async function* () {},
+        }),
+      },
+      orders: {
+        create: vi.fn().mockResolvedValue({
+          order: {
+            id: 'sq-order-1',
+            totalMoney: { amount: BigInt(5000), currency: 'USD' },
+            totalTaxMoney: { amount: BigInt(0), currency: 'USD' },
+            fulfillments: [{ uid: 'f-uid-1' }],
+          },
+        }),
+      },
+      payments: {
+        create: vi.fn().mockResolvedValue({
+          payment: {
+            id: 'sq-pay-1',
+            status: 'COMPLETED',
+            amountMoney: { amount: BigInt(5000), currency: 'USD' },
+          },
+        }),
+      },
+      customers: {
+        search: vi.fn().mockResolvedValue({ customers: [] }),
+        create: vi.fn().mockResolvedValue({ customer: { id: 'sq-cust-1' } }),
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any)
+
+    const handler = createCheckoutHandler({
+      ...baseOptions,
+      shipping: { rates: [{ id: 'standard', name: 'Standard', amount: 599 }], freeShippingThreshold: 3000 },
+    })
+    const res = await handler(
+      makeReq({
+        sourceId: 'tok_1',
+        cart: {
+          items: [{ variationId: 'var-1', quantity: 1, unitPrice: 5000 }], // above threshold
+          shippingAddress: {
+            firstName: 'Jane', lastName: 'Doe', address1: '1 Main St',
+            city: 'Portland', state: 'OR', zip: '97201',
+          },
+          // no shippingRateId — should be fine because cart qualifies for free shipping
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      }) as any,
+    )
+    expect(res.status).toBe(200)
+  })
+})
+
 describe('createCheckoutHandler — loyalty opt-in gating', () => {
   it('does not attempt loyalty setup when loyaltyOptIn is false', async () => {
     const { createSquareClient } = await import('../lib/squareClient.js')

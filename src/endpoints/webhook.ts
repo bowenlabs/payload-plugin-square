@@ -2,6 +2,7 @@ import type { PayloadHandler } from 'payload'
 import { WebhooksHelper } from 'square'
 
 import { broadcastCatalogUpdate, broadcastInventoryUpdate } from '../lib/inventoryBroadcast.js'
+import { createSquareClient } from '../lib/squareClient.js'
 import { syncCatalog } from '../tasks/syncCatalog.js'
 import type { PayloadPluginSquareConfig } from '../types.js'
 
@@ -51,7 +52,11 @@ export function createWebhookHandler(options: PayloadPluginSquareConfig): Payloa
 
     const { event_id: eventId, type, data } = event
 
-    // Replay protection — skip events we've already processed
+    // Replay protection — skip events we've already processed.
+    // The application-level find+create has a TOCTOU window where two concurrent deliveries
+    // of the same event can both pass the "not found" check. The unique constraint on eventId
+    // is the hard guard: whichever request loses the race gets a unique violation, which we
+    // catch here and treat as a duplicate rather than letting the error propagate.
     if (eventId) {
       const seen = await req.payload.find({
         collection: 'square-webhook-events',
@@ -63,11 +68,20 @@ export function createWebhookHandler(options: PayloadPluginSquareConfig): Payloa
         req.payload.logger.info(`Square webhook duplicate skipped: ${eventId}`)
         return new Response(null, { status: 200 })
       }
-      await req.payload.create({
-        collection: 'square-webhook-events',
-        data: { eventId, eventType: type },
-        overrideAccess: true,
-      })
+      try {
+        await req.payload.create({
+          collection: 'square-webhook-events',
+          data: { eventId, eventType: type },
+          overrideAccess: true,
+        })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message.toLowerCase() : ''
+        if (msg.includes('unique') || msg.includes('duplicate')) {
+          req.payload.logger.info(`Square webhook concurrent duplicate skipped: ${eventId}`)
+          return new Response(null, { status: 200 })
+        }
+        throw err
+      }
     }
 
     if (hooks?.onWebhookReceived) {
@@ -96,6 +110,14 @@ export function createWebhookHandler(options: PayloadPluginSquareConfig): Payloa
 
     if (type === 'refund.updated') {
       await handleRefundUpdated(req, data.object)
+    }
+
+    if (type === 'order.fulfillment.updated') {
+      await handleFulfillmentUpdated(req, data.object, options)
+    }
+
+    if (type === 'subscription.updated' || type === 'subscription.created') {
+      await handleSubscriptionUpdated(req, data.object)
     }
 
     // Square retries delivery on any non-200 response
@@ -289,6 +311,116 @@ async function handleRefundUpdated(
   req.payload.logger.info(
     `Refund processed: order ${order.id as string} → ${newStatus} (refunded ${refundAmount} of ${orderTotal})`,
   )
+}
+
+async function handleFulfillmentUpdated(
+  req: Parameters<PayloadHandler>[0],
+  object: Record<string, unknown>,
+  options: PayloadPluginSquareConfig,
+) {
+  type FulfillmentUpdate = { fulfillment_uid?: string; new_state?: string }
+  const squareOrderId = object['order_id'] as string | undefined
+  const updates = (object['fulfillment_update'] as FulfillmentUpdate[] | undefined) ?? []
+
+  if (!squareOrderId || updates.length === 0) return
+
+  // Find the Payload order by squareOrderId
+  const orders = await req.payload.find({
+    collection: 'orders',
+    where: { squareOrderId: { equals: squareOrderId } },
+    overrideAccess: true,
+    limit: 1,
+  })
+  if (orders.docs.length === 0) return
+
+  const payloadOrder = orders.docs[0]!
+  const orderId = payloadOrder.id as string
+
+  // Match the specific fulfillment to the one we stored, or use the first update
+  const storedUid = payloadOrder.squareFulfillmentUid as string | undefined
+  const update = updates.find((u) => !storedUid || u.fulfillment_uid === storedUid) ?? updates[0]!
+  const newState = update.new_state
+
+  const fulfillmentStatusMap: Record<string, 'pending' | 'shipped' | 'delivered' | 'failed'> = {
+    PROPOSED: 'pending',
+    RESERVED: 'pending',
+    PREPARED: 'shipped',
+    COMPLETED: 'delivered',
+    CANCELED: 'failed',
+    FAILED: 'failed',
+  }
+  const newFulfillmentStatus = newState ? (fulfillmentStatusMap[newState] ?? 'pending') : undefined
+
+  // Fetch the full Square order to get tracking info
+  let trackingNumber: string | undefined
+  let trackingUrl: string | undefined
+  let carrier: string | undefined
+
+  try {
+    const client = createSquareClient(options.accessToken, options.environment ?? 'sandbox')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const orderResp = await (client.orders as any).retrieve(squareOrderId)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fullOrder = (orderResp as any).order
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fulfillment = (fullOrder?.fulfillments as any[] | undefined)?.find(
+      (f: { uid?: string }) => !storedUid || f.uid === storedUid,
+    )
+    const shipmentDetails = fulfillment?.shipmentDetails
+    trackingNumber = shipmentDetails?.trackingNumber
+    trackingUrl = shipmentDetails?.trackingUrl
+    carrier = shipmentDetails?.carrier
+  } catch (err) {
+    req.payload.logger.warn({ msg: 'Failed to retrieve Square order for fulfillment details', err })
+  }
+
+  await req.payload.update({
+    collection: 'orders',
+    id: orderId,
+    data: {
+      ...(newFulfillmentStatus ? { fulfillmentStatus: newFulfillmentStatus } : {}),
+      ...(trackingNumber ? { trackingNumber } : {}),
+      ...(trackingUrl ? { trackingUrl } : {}),
+      ...(carrier ? { shippingCarrier: carrier } : {}),
+    },
+    overrideAccess: true,
+  })
+
+  req.payload.logger.info(
+    `Fulfillment updated: order ${orderId} → ${newFulfillmentStatus ?? 'unchanged'}${trackingNumber ? ` (tracking: ${trackingNumber})` : ''}`,
+  )
+}
+
+async function handleSubscriptionUpdated(
+  req: Parameters<PayloadHandler>[0],
+  object: Record<string, unknown>,
+) {
+  const sub = (object as { subscription?: Record<string, unknown> }).subscription
+  if (!sub?.id) return
+
+  const squareSubscriptionId = sub['id'] as string
+  const status = sub['status'] as string | undefined
+  const chargedThroughDate = sub['charged_through_date'] as string | undefined
+
+  const existing = await req.payload.find({
+    collection: 'square-subscriptions',
+    where: { squareSubscriptionId: { equals: squareSubscriptionId } },
+    limit: 1,
+    overrideAccess: true,
+  })
+
+  if (existing.docs.length > 0) {
+    await req.payload.update({
+      collection: 'square-subscriptions',
+      id: existing.docs[0]!.id as string,
+      data: {
+        ...(status ? { status } : {}),
+        ...(chargedThroughDate ? { chargedThroughDate } : {}),
+      },
+      overrideAccess: true,
+    })
+    req.payload.logger.info(`Subscription ${squareSubscriptionId} → ${status ?? 'unchanged'}`)
+  }
 }
 
 async function handleInventoryCountUpdated(

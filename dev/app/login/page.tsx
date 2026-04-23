@@ -48,9 +48,26 @@ export default function LoginPage() {
         }}
       >
         <h1 style={{ margin: '0 0 8px', fontSize: 22, fontWeight: 700 }}>Sign in</h1>
-        <p style={{ margin: '0 0 24px', fontSize: 14, color: '#6b7280' }}>
+        <p style={{ margin: '0 0 16px', fontSize: 14, color: '#6b7280' }}>
           Access your orders and loyalty rewards.
         </p>
+
+        <div
+          style={{
+            marginBottom: 20,
+            padding: '10px 14px',
+            borderRadius: 6,
+            background: '#fffbeb',
+            border: '1px solid #fbbf24',
+            fontSize: 13,
+            color: '#78350f',
+          }}
+        >
+          <strong>Sandbox credentials</strong>
+          <br />
+          <span style={{ fontFamily: 'monospace' }}>dev@payloadcms.com</span> /{' '}
+          <span style={{ fontFamily: 'monospace' }}>test</span>
+        </div>
 
         <form onSubmit={(e) => void handleSubmit(e)} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div>

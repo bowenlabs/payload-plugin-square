@@ -4,10 +4,20 @@ import { Customers } from './collections/Customers.js'
 import { Orders } from './collections/Orders.js'
 import { createSquareCatalogItemsCollection } from './collections/SquareCatalogItems.js'
 import { SquarePayments } from './collections/SquarePayments.js'
+import { SquareSubscriptions } from './collections/SquareSubscriptions.js'
 import { SquareWebhookEvents } from './collections/SquareWebhookEvents.js'
 import { createCheckoutHandler } from './endpoints/checkout.js'
 import { inventoryStreamHandler } from './endpoints/inventoryStream.js'
 import { createLoyaltyBalanceHandler } from './endpoints/loyaltyBalance.js'
+import {
+  createCancelSubscriptionHandler,
+  createListSubscriptionsHandler,
+  createPauseSubscriptionHandler,
+  createResumeSubscriptionHandler,
+} from './endpoints/manageSubscriptions.js'
+import { createShippingRatesHandler } from './endpoints/shippingRates.js'
+import { createSubscribeHandler } from './endpoints/subscribe.js'
+import { createSubscriptionPlansHandler } from './endpoints/subscriptionPlans.js'
 import { makeSyncHandler } from './endpoints/syncEndpoint.js'
 import { createWebhookHandler } from './endpoints/webhook.js'
 import { primaryLocation } from './lib/locationUtils.js'
@@ -23,10 +33,13 @@ export type {
   Customer,
   Order,
   OrderLineItem,
+  ShippingAddress,
+  ShippingRate,
   SquarePayment,
   SyncContext,
   WebhookContext,
 } from './types.js'
+export { SquareSubscriptions } from './collections/SquareSubscriptions.js'
 
 export const payloadPluginSquare =
   (pluginOptions: PayloadPluginSquareConfig) =>
@@ -44,6 +57,7 @@ export const payloadPluginSquare =
       Customers,
       SquarePayments,
       SquareWebhookEvents,
+      SquareSubscriptions,
     )
 
     if (pluginOptions.disabled) {
@@ -84,6 +98,49 @@ export const payloadPluginSquare =
         method: 'get',
         handler: createLoyaltyBalanceHandler(pluginOptions),
       })
+    }
+
+    if (pluginOptions.shipping) {
+      config.endpoints.push({
+        path: '/square/shipping/rates',
+        method: 'get',
+        handler: createShippingRatesHandler(pluginOptions),
+      })
+    }
+
+    if (pluginOptions.subscriptions) {
+      config.endpoints.push(
+        {
+          path: '/square/subscriptions/plans',
+          method: 'get',
+          handler: createSubscriptionPlansHandler(pluginOptions),
+        },
+        {
+          path: '/square/subscriptions/subscribe',
+          method: 'post',
+          handler: createSubscribeHandler(pluginOptions),
+        },
+        {
+          path: '/square/subscriptions',
+          method: 'get',
+          handler: createListSubscriptionsHandler(pluginOptions),
+        },
+        {
+          path: '/square/subscriptions/cancel',
+          method: 'post',
+          handler: createCancelSubscriptionHandler(pluginOptions),
+        },
+        {
+          path: '/square/subscriptions/pause',
+          method: 'post',
+          handler: createPauseSubscriptionHandler(pluginOptions),
+        },
+        {
+          path: '/square/subscriptions/resume',
+          method: 'post',
+          handler: createResumeSubscriptionHandler(pluginOptions),
+        },
+      )
     }
 
     if (endpointOptions.sync !== false) {

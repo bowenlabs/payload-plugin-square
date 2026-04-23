@@ -9,6 +9,9 @@
 /.idea/*
 !/.idea/runConfigurations
 
+# Editor
+.vscode/
+
 # testing
 /coverage
 
@@ -42,6 +45,7 @@ next-env.d.ts
 .env
 
 /dev/media
+/dev/square-media
 
 # Claude Code local settings
 .claude/settings.local.json
