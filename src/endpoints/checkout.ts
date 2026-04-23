@@ -3,7 +3,24 @@ import { SquareError } from 'square'
 
 import { primaryLocation, allLocations } from '../lib/locationUtils.js'
 import { createSquareClient } from '../lib/squareClient.js'
+import type {
+  SquareCustomerSearchResponse,
+  SquareCustomerCreateResponse,
+  SquareLoyaltyAPI,
+  SquareOrdersAPI,
+} from '../lib/squareTypes.js'
 import type { Cart, Customer, Order, PayloadPluginSquareConfig, SquarePayment } from '../types.js'
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function escHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
 
 export function createCheckoutHandler(options: PayloadPluginSquareConfig): PayloadHandler {
   return async (req) => {
@@ -86,6 +103,12 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       )
     }
 
+    // ── Email validation ─────────────────────────────────────────────────────
+    const customerEmail = cart.guestEmail ?? undefined
+    if (customerEmail && !EMAIL_RE.test(customerEmail)) {
+      return Response.json({ error: 'guestEmail is not a valid email address' }, { status: 400 })
+    }
+
     if (hooks?.beforeCheckout) {
       await hooks.beforeCheckout({ req, cart })
     }
@@ -96,10 +119,8 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       catalogResponse = await client.catalog.batchGet({ objectIds: variationIds })
     } catch (err) {
       if (err instanceof SquareError) {
-        return Response.json(
-          { error: 'Failed to fetch catalog', details: err.message },
-          { status: 502 },
-        )
+        req.payload.logger.error({ err }, 'Failed to fetch catalog for price verification')
+        return Response.json({ error: 'Failed to fetch catalog' }, { status: 502 })
       }
       throw err
     }
@@ -139,7 +160,7 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
         catalogObjectIds: variationIds,
         locationIds,
       })) {
-        if (count.catalogObjectId && count.quantity) {
+        if (count.catalogObjectId && count.quantity !== undefined) {
           inventoryMap.set(count.catalogObjectId, parseFloat(count.quantity))
         }
       }
@@ -158,16 +179,13 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       }
     } catch (err) {
       if (err instanceof SquareError) {
-        return Response.json(
-          { error: 'Failed to verify inventory', details: err.message },
-          { status: 502 },
-        )
+        req.payload.logger.error({ err }, 'Failed to verify inventory')
+        return Response.json({ error: 'Failed to verify inventory' }, { status: 502 })
       }
       throw err
     }
 
     // ── Step 3: Find or create customer + loyalty account ───────────────────
-    const customerEmail = cart.guestEmail ?? undefined
     const customerUserId = cart.userId ?? undefined
     let customerId: string | undefined
     let customerDoc: Customer | undefined
@@ -191,22 +209,20 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
         // Try to find or create the Square customer record (non-fatal)
         let squareCustomerId: string | undefined
         try {
-          const searchResp = await client.customers.search({
+          const searchResp = (await client.customers.search({
             query: { filter: { emailAddress: { exact: customerEmail } } },
-          })
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          squareCustomerId = (searchResp as any).customers?.[0]?.id
+          })) as unknown as SquareCustomerSearchResponse
+          squareCustomerId = searchResp.customers?.[0]?.id
 
           if (!squareCustomerId && customerEmail) {
-            const createResp = await client.customers.create({
+            const createResp = (await client.customers.create({
               emailAddress: customerEmail,
               idempotencyKey: crypto.randomUUID(),
-            })
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            squareCustomerId = (createResp as any).customer?.id
+            })) as unknown as SquareCustomerCreateResponse
+            squareCustomerId = createResp.customer?.id
           }
         } catch (err) {
-          req.payload.logger.warn({ msg: 'Failed to find/create Square customer', err })
+          req.payload.logger.warn({ err }, 'Failed to find/create Square customer')
         }
 
         const newCustomer = await req.payload.create({
@@ -227,25 +243,22 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       if (loyalty && cart.loyaltyOptIn && customerEmail && !loyaltyAccountId) {
         try {
           const programId = loyalty.programId ?? 'main'
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const searchResp = await (client.loyalty as any).searchAccounts({
+          const loyaltyApi = client.loyalty as unknown as SquareLoyaltyAPI
+          const searchResp = await loyaltyApi.searchAccounts({
             query: { mappings: [{ type: 'EMAIL', value: customerEmail }] },
             limit: 1,
           })
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          loyaltyAccountId = (searchResp as any).loyaltyAccounts?.[0]?.id
+          loyaltyAccountId = searchResp.loyaltyAccounts?.[0]?.id
 
           if (!loyaltyAccountId) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const createResp = await (client.loyalty as any).createAccount({
+            const createResp = await loyaltyApi.createAccount({
               idempotencyKey: crypto.randomUUID(),
               loyaltyAccount: {
                 programId,
                 mapping: { type: 'EMAIL', value: customerEmail },
               },
             })
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            loyaltyAccountId = (createResp as any).loyaltyAccount?.id
+            loyaltyAccountId = createResp.loyaltyAccount?.id
           }
 
           if (loyaltyAccountId && customerId) {
@@ -257,7 +270,7 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
             })
           }
         } catch (err) {
-          req.payload.logger.warn({ msg: 'Failed to find/create Square loyalty account', err })
+          req.payload.logger.warn({ err }, 'Failed to find/create Square loyalty account')
         }
       }
     }
@@ -316,18 +329,14 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
         },
       })
       if (!orderResponse.order) {
-        return Response.json(
-          { error: 'Square order creation returned no order', details: orderResponse.errors },
-          { status: 502 },
-        )
+        req.payload.logger.error({ errors: orderResponse.errors }, 'Square order creation returned no order')
+        return Response.json({ error: 'Failed to create order' }, { status: 502 })
       }
       squareOrder = orderResponse.order
     } catch (err) {
       if (err instanceof SquareError) {
-        return Response.json(
-          { error: 'Failed to create Square order', details: err.message },
-          { status: 502 },
-        )
+        req.payload.logger.error({ err }, 'Failed to create Square order')
+        return Response.json({ error: 'Failed to create order' }, { status: 502 })
       }
       throw err
     }
@@ -335,8 +344,8 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
     // ── Step 5: Apply loyalty reward (if requested) ─────────────────────────
     if (cart.loyaltyRewardDefinitionId && loyaltyAccountId) {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (client.loyalty as any).createLoyaltyReward({
+        const loyaltyApi = client.loyalty as unknown as SquareLoyaltyAPI
+        await loyaltyApi.createLoyaltyReward({
           idempotencyKey: crypto.randomUUID(),
           reward: {
             loyaltyAccountId,
@@ -346,15 +355,12 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
         })
 
         // Retrieve the order with the discount applied to get the updated total
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const updatedOrderResp = await (client.orders as any).retrieve(squareOrder.id)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        if ((updatedOrderResp as any).order) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          squareOrder = (updatedOrderResp as any).order
+        const updatedOrderResp = await (client.orders as unknown as SquareOrdersAPI).retrieve(squareOrder.id!)
+        if (updatedOrderResp.order) {
+          squareOrder = updatedOrderResp.order as typeof squareOrder
         }
       } catch (err) {
-        req.payload.logger.error({ msg: 'Failed to apply loyalty reward', err })
+        req.payload.logger.error({ err }, 'Failed to apply loyalty reward')
         return Response.json(
           { error: 'Failed to apply loyalty reward — please try again without redeeming points' },
           { status: 400 },
@@ -378,22 +384,21 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
         locationId: locationIdPrimary,
       })
       if (!paymentResponse.payment) {
-        return Response.json(
-          { error: 'Payment creation returned no payment', details: paymentResponse.errors },
-          { status: 402 },
-        )
+        req.payload.logger.error({ errors: paymentResponse.errors }, 'Payment creation returned no payment')
+        return Response.json({ error: 'Payment processing failed' }, { status: 402 })
       }
       squarePaymentObj = paymentResponse.payment
     } catch (err) {
       if (err instanceof SquareError) {
-        return Response.json({ error: 'Payment failed', details: err.message }, { status: 402 })
+        req.payload.logger.error({ err }, 'Payment failed')
+        return Response.json({ error: 'Payment processing failed' }, { status: 402 })
       }
       throw err
     }
 
     // ── Step 7: Persist order to Payload DB ─────────────────────────────────
     const subtotal = cart.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
-    const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`
+    const orderNumber = `ORD-${crypto.randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase()}`
 
     const enrichedLineItems = cart.items.map((item) => {
       const variation = catalogObjects.find((o) => o.id === item.variationId)
@@ -452,10 +457,10 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       })) as unknown as Order
     } catch (dbErr) {
       req.payload.logger.error({
-        msg: 'Order DB write failed after successful Square payment — manual reconciliation required',
         squarePaymentId: squarePaymentObj.id,
         squareOrderId: squareOrder.id,
         err: dbErr,
+        msg: 'Order DB write failed after successful Square payment — manual reconciliation required',
       })
       return Response.json(
         {
@@ -470,17 +475,14 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
     // ── Step 8: Accrue loyalty points via Square (non-fatal) ─────────────────
     if (loyalty && cart.loyaltyOptIn && loyaltyAccountId) {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (client.loyalty as any).accumulatePoints(loyaltyAccountId, {
-          accumulatePoints: { orderId: squareOrder.id },
+        const loyaltyApi = client.loyalty as unknown as SquareLoyaltyAPI
+        await loyaltyApi.accumulatePoints(loyaltyAccountId, {
+          accumulatePoints: { orderId: squareOrder.id! },
           idempotencyKey: crypto.randomUUID(),
           locationId: locationIdPrimary,
         })
-        // Sync the updated balance back to our customer record
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const accountResp = await (client.loyalty as any).retrieveLoyaltyAccount(loyaltyAccountId)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const updatedBalance = (accountResp as any).loyaltyAccount?.balance
+        const accountResp = await loyaltyApi.retrieveLoyaltyAccount(loyaltyAccountId)
+        const updatedBalance = accountResp.loyaltyAccount?.balance
         if (customerId && updatedBalance !== undefined) {
           await req.payload.update({
             collection: 'customers',
@@ -490,7 +492,7 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
           })
         }
       } catch (err) {
-        req.payload.logger.warn({ msg: 'Failed to accrue loyalty points via Square', err })
+        req.payload.logger.warn({ err }, 'Failed to accrue loyalty points via Square')
         // loyalty.account.updated webhook will sync the balance if this fails
       }
     }
@@ -517,10 +519,9 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       })
     } catch (auditErr) {
       req.payload.logger.error({
-        msg: 'Failed to write payments audit record',
         squarePaymentId: squarePaymentObj.id,
         err: auditErr,
-      })
+      }, 'Failed to write payments audit record')
     }
 
     // ── Step 10: Order confirmation email (non-fatal) ────────────────────────
@@ -529,21 +530,21 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
         const lineItemsHtml = enrichedLineItems
           .map(
             (li) =>
-              `<tr><td>${li.productName}</td><td style="text-align:center">${li.quantity}</td><td style="text-align:right">$${(li.totalPrice / 100).toFixed(2)}</td></tr>`,
+              `<tr><td>${escHtml(li.productName)}</td><td style="text-align:center">${li.quantity}</td><td style="text-align:right">$${(li.totalPrice / 100).toFixed(2)}</td></tr>`,
           )
           .join('')
 
         const shippingRowHtml =
           resolvedShippingAmount > 0
-            ? `<tr><td colspan="2" style="color:#6b7280">Shipping (${resolvedShippingRate?.name ?? ''})</td><td style="text-align:right;color:#6b7280">$${(resolvedShippingAmount / 100).toFixed(2)}</td></tr>`
+            ? `<tr><td colspan="2" style="color:#6b7280">Shipping (${escHtml(resolvedShippingRate?.name ?? '')})</td><td style="text-align:right;color:#6b7280">$${(resolvedShippingAmount / 100).toFixed(2)}</td></tr>`
             : ''
 
         const shippingAddressHtml = shippingAddress
           ? `<p style="margin:16px 0 0">
                <strong>Ship to:</strong><br>
-               ${shippingAddress.firstName} ${shippingAddress.lastName}<br>
-               ${shippingAddress.address1}${shippingAddress.address2 ? `, ${shippingAddress.address2}` : ''}<br>
-               ${shippingAddress.city}, ${shippingAddress.state} ${shippingAddress.zip}
+               ${escHtml(shippingAddress.firstName)} ${escHtml(shippingAddress.lastName)}<br>
+               ${escHtml(shippingAddress.address1)}${shippingAddress.address2 ? `, ${escHtml(shippingAddress.address2)}` : ''}<br>
+               ${escHtml(shippingAddress.city)}, ${escHtml(shippingAddress.state)} ${escHtml(shippingAddress.zip)}
              </p>`
           : ''
 
@@ -552,7 +553,7 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
           subject: `Order ${payloadOrder.orderNumber} confirmed`,
           html: `
             <h2>Thanks for your order!</h2>
-            <p>Order <strong>${payloadOrder.orderNumber}</strong> has been placed.</p>
+            <p>Order <strong>${escHtml(payloadOrder.orderNumber)}</strong> has been placed.</p>
             <table style="width:100%;border-collapse:collapse;margin:16px 0">
               <thead><tr><th style="text-align:left">Item</th><th>Qty</th><th style="text-align:right">Total</th></tr></thead>
               <tbody>${lineItemsHtml}</tbody>
@@ -565,7 +566,7 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
           `,
         })
       } catch (emailErr) {
-        req.payload.logger.warn({ msg: 'Failed to send order confirmation email', err: emailErr })
+        req.payload.logger.warn({ err: emailErr }, 'Failed to send order confirmation email')
       }
     }
 

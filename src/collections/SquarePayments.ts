@@ -10,7 +10,7 @@ export const createSquarePaymentsCollection = (
     useAsTitle: 'squarePaymentId',
     defaultColumns: ['squarePaymentId', 'status', 'amount', 'createdAt'],
     group: 'Square',
-    description: 'Internal audit log of raw Square payment responses. Do not expose to end users.',
+    description: 'Audit log of Square payment responses captured at checkout. Contains sensitive financial data — visible to admins only. Use squarePaymentId to look up a transaction in your Square Dashboard.',
   },
   access: {
     // Payment audit records contain sensitive financial data — admins only.
@@ -30,20 +30,22 @@ export const createSquarePaymentsCollection = (
       name: 'squareOrderId',
       type: 'text',
       index: true,
+      admin: { description: 'Square order ID this payment belongs to' },
     },
     {
       name: 'rawResponse',
       type: 'json',
-      admin: { description: 'Raw Square API payment response for reconciliation' },
+      admin: { description: 'Full Square API payment response — useful for reconciliation and dispute resolution' },
     },
     {
       name: 'status',
       type: 'text',
+      admin: { description: 'Square payment status: APPROVED, COMPLETED, CANCELED, or FAILED' },
     },
     {
       name: 'amount',
       type: 'number',
-      admin: { description: 'Amount in cents' },
+      admin: { description: 'Amount charged in cents (e.g. 1999 = $19.99)' },
     },
     {
       name: 'currency',

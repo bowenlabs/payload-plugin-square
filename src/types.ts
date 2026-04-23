@@ -9,6 +9,12 @@ export type PayloadPluginSquareConfig = {
   environment?: 'sandbox' | 'production'
   /** Required to enable the webhook endpoint */
   webhookSecret?: string
+  /**
+   * Explicit public URL of the webhook endpoint, e.g. 'https://mysite.com/api/square/webhook'.
+   * When set, this is used for HMAC signature verification instead of reconstructing the URL
+   * from request headers. Recommended when the server runs behind a reverse proxy.
+   */
+  webhookUrl?: string
   /** Payload collection slug for storing synced images. Defaults to 'media' */
   mediaCollectionSlug?: string
   /** Run a full catalog sync when Payload initializes */

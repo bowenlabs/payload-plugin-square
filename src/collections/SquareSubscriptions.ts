@@ -11,7 +11,7 @@ export const createSquareSubscriptionsCollection = (
     useAsTitle: 'planName',
     defaultColumns: ['planName', 'status', 'cadence', 'priceAmount', 'startDate'],
     group: 'Square',
-    description: 'Active Square subscriptions. Created via the subscribe endpoint; status synced via webhooks.',
+    description: 'Customer subscription records created via the subscribe endpoint. Status, billing dates, and cancellations are kept in sync automatically via Square webhooks.',
   },
   access: {
     // userId is stored directly (denormalized) to keep this a simple single-field query
@@ -45,7 +45,7 @@ export const createSquareSubscriptionsCollection = (
       name: 'planVariationId',
       type: 'text',
       index: true,
-      admin: { readOnly: true, description: 'Square SUBSCRIPTION_PLAN_VARIATION catalog object ID' },
+      admin: { readOnly: true, description: 'Square catalog ID of the subscription plan variation the customer subscribed to' },
     },
     {
       name: 'planName',
@@ -55,12 +55,12 @@ export const createSquareSubscriptionsCollection = (
     {
       name: 'cadence',
       type: 'text',
-      admin: { readOnly: true, description: 'e.g. MONTHLY, WEEKLY, ANNUAL' },
+      admin: { readOnly: true, description: 'Billing frequency from Square: MONTHLY, WEEKLY, ANNUAL, etc.' },
     },
     {
       name: 'priceAmount',
       type: 'number',
-      admin: { readOnly: true, description: 'Recurring price in cents' },
+      admin: { readOnly: true, description: 'Recurring charge amount in cents per billing cycle (e.g. 999 = $9.99/month)' },
     },
     {
       name: 'currency',
@@ -76,7 +76,7 @@ export const createSquareSubscriptionsCollection = (
     {
       name: 'chargedThroughDate',
       type: 'date',
-      admin: { readOnly: true, description: 'Date through which the subscription is paid' },
+      admin: { readOnly: true, description: 'The date through which the customer has already paid. After this date the next billing cycle begins.' },
     },
     {
       name: 'squareCustomerId',
@@ -87,7 +87,7 @@ export const createSquareSubscriptionsCollection = (
     {
       name: 'squareCardId',
       type: 'text',
-      admin: { readOnly: true, position: 'sidebar', description: 'Square card-on-file ID used for billing' },
+      admin: { readOnly: true, position: 'sidebar', description: 'Square card-on-file ID used for recurring billing. The card is stored securely in Square — no card data touches this server.' },
     },
     {
       name: 'customer',
@@ -102,7 +102,14 @@ export const createSquareSubscriptionsCollection = (
       name: 'userId',
       type: 'text',
       index: true,
-      admin: { readOnly: true, position: 'sidebar', description: 'Payload user ID of the subscriber' },
+      admin: { readOnly: true, position: 'sidebar', description: 'Payload user ID of the subscriber — denormalized for fast access control queries' },
+    },
+    {
+      name: 'idempotencyKey',
+      type: 'text',
+      unique: true,
+      index: true,
+      admin: { readOnly: true, position: 'sidebar', description: 'Idempotency key from the subscribe request. If a client retries with the same key, the existing subscription is returned instead of creating a duplicate.' },
     },
   ],
   timestamps: true,

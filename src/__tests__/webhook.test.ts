@@ -143,7 +143,10 @@ describe('createWebhookHandler — replay protection', () => {
     const handler = createWebhookHandler(baseOptions)
 
     const payloadOverrides = {
-      find: vi.fn().mockResolvedValue({ docs: [] }), // not seen before
+      // First call: not seen. Second call (re-check after constraint violation): found.
+      find: vi.fn()
+        .mockResolvedValueOnce({ docs: [] })
+        .mockResolvedValueOnce({ docs: [{ id: 'evt-concurrent' }] }),
       // Simulate concurrent delivery: unique constraint violation on the create
       create: vi.fn().mockRejectedValueOnce(new Error('UNIQUE constraint failed: square-webhook-events_eventId')),
       update: vi.fn(),

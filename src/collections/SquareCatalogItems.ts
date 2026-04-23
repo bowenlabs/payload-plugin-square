@@ -18,7 +18,7 @@ export const createSquareCatalogItemsCollection = (
     useAsTitle: 'name',
     defaultColumns: ['name', 'type', 'lastSyncedAt', 'updatedAt'],
     group: 'Square',
-    description: 'Read-only. Data is managed by Square and synced via the Square API.',
+    description: 'Product catalog synced from Square. Records are created and updated automatically — edit products in your Square Dashboard and trigger a sync to reflect changes here.',
   },
   fields: [
     {
@@ -26,13 +26,13 @@ export const createSquareCatalogItemsCollection = (
       type: 'text',
       required: true,
       index: true,
-      admin: { position: 'sidebar' },
+      admin: { position: 'sidebar', description: 'Square catalog object ID for this item' },
     },
     {
       name: 'squareImageId',
       type: 'text',
       index: true,
-      admin: { position: 'sidebar', readOnly: true },
+      admin: { position: 'sidebar', readOnly: true, description: 'Square image object ID — used to sync the product image from Square' },
     },
     {
       name: 'type',
@@ -43,7 +43,7 @@ export const createSquareCatalogItemsCollection = (
     {
       name: 'lastSyncedAt',
       type: 'date',
-      admin: { position: 'sidebar', readOnly: true },
+      admin: { position: 'sidebar', readOnly: true, description: 'Timestamp of the last successful sync from Square' },
     },
     {
       name: 'image',
@@ -62,13 +62,14 @@ export const createSquareCatalogItemsCollection = (
     {
       name: 'variations',
       type: 'array',
+      admin: { description: 'Product variants (size, color, etc.) synced from Square. Each variation has its own price and inventory count.' },
       fields: [
-        { name: 'squareId', type: 'text' },
-        { name: 'name', type: 'text' },
-        { name: 'sku', type: 'text' },
-        { name: 'price', type: 'number' },
-        { name: 'currency', type: 'text' },
-        { name: 'inventoryCount', type: 'number' },
+        { name: 'squareId', type: 'text', admin: { description: 'Square catalog variation ID — used as the cart item variationId at checkout' } },
+        { name: 'name', type: 'text', admin: { description: 'Variation name, e.g. Small, Red / Large' } },
+        { name: 'sku', type: 'text', admin: { description: 'Merchant-assigned SKU (stock-keeping unit)' } },
+        { name: 'price', type: 'number', min: 0, admin: { description: 'Listed price in cents (e.g. 1999 = $19.99), synced from Square' } },
+        { name: 'currency', type: 'text', admin: { description: 'ISO 4217 currency code, e.g. USD' } },
+        { name: 'inventoryCount', type: 'number', min: 0, admin: { description: 'Current stock count. Updated automatically via Square inventory webhooks.' } },
       ],
     },
   ],

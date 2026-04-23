@@ -3,6 +3,7 @@ import { WebhooksHelper } from 'square'
 
 import { broadcastCatalogUpdate, broadcastInventoryUpdate } from '../lib/inventoryBroadcast.js'
 import { createSquareClient } from '../lib/squareClient.js'
+import type { SquareOrdersAPI } from '../lib/squareTypes.js'
 import { syncCatalog } from '../tasks/syncCatalog.js'
 import type { PayloadPluginSquareConfig } from '../types.js'
 
@@ -21,10 +22,12 @@ export function createWebhookHandler(options: PayloadPluginSquareConfig): Payloa
     const rawBody = (await req.text?.()) ?? ''
     const signatureHeader = req.headers.get('x-square-hmacsha256-signature') ?? ''
 
-    // Reconstruct the notification URL Square used when sending this event
-    const proto = req.headers.get('x-forwarded-proto') ?? 'https'
-    const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? ''
-    const notificationUrl = `${proto}://${host}/api/square/webhook`
+    // Use the explicitly configured URL when available (recommended behind a reverse proxy).
+    // Falling back to header reconstruction is acceptable for simple deployments but can be
+    // spoofed if x-forwarded-* headers are not restricted at the proxy layer.
+    const notificationUrl =
+      options.webhookUrl ??
+      `${req.headers.get('x-forwarded-proto') ?? 'https'}://${req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? ''}/api/square/webhook`
 
     let isValid: boolean
     try {
@@ -35,7 +38,7 @@ export function createWebhookHandler(options: PayloadPluginSquareConfig): Payloa
         notificationUrl,
       })
     } catch (err) {
-      req.payload.logger.error({ msg: 'Square webhook signature verification threw', err })
+      req.payload.logger.error({ err }, 'Square webhook signature verification threw')
       return new Response('Signature verification error', { status: 401 })
     }
 
@@ -55,8 +58,9 @@ export function createWebhookHandler(options: PayloadPluginSquareConfig): Payloa
     // Replay protection — skip events we've already processed.
     // The application-level find+create has a TOCTOU window where two concurrent deliveries
     // of the same event can both pass the "not found" check. The unique constraint on eventId
-    // is the hard guard: whichever request loses the race gets a unique violation, which we
-    // catch here and treat as a duplicate rather than letting the error propagate.
+    // is the hard guard: whichever request loses the race gets a unique violation. We detect
+    // duplicates by doing a definitive re-check on any create error, which is robust across
+    // all DB adapters without relying on error message string matching.
     if (eventId) {
       const seen = await req.payload.find({
         collection: 'square-webhook-events',
@@ -65,7 +69,7 @@ export function createWebhookHandler(options: PayloadPluginSquareConfig): Payloa
         overrideAccess: true,
       })
       if (seen.docs.length > 0) {
-        req.payload.logger.info(`Square webhook duplicate skipped: ${eventId}`)
+        req.payload.logger.info({ eventId }, 'Square webhook duplicate skipped')
         return new Response(null, { status: 200 })
       }
       try {
@@ -75,9 +79,16 @@ export function createWebhookHandler(options: PayloadPluginSquareConfig): Payloa
           overrideAccess: true,
         })
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message.toLowerCase() : ''
-        if (msg.includes('unique') || msg.includes('duplicate')) {
-          req.payload.logger.info(`Square webhook concurrent duplicate skipped: ${eventId}`)
+        // Definitive re-check: if the record exists now, it's a concurrent duplicate.
+        // This is reliable across MongoDB, PostgreSQL, and SQLite without message-string matching.
+        const recheck = await req.payload.find({
+          collection: 'square-webhook-events',
+          where: { eventId: { equals: eventId } },
+          limit: 1,
+          overrideAccess: true,
+        })
+        if (recheck.docs.length > 0) {
+          req.payload.logger.info({ eventId }, 'Square webhook concurrent duplicate skipped')
           return new Response(null, { status: 200 })
         }
         throw err
@@ -88,20 +99,30 @@ export function createWebhookHandler(options: PayloadPluginSquareConfig): Payloa
       await hooks.onWebhookReceived({ req, eventType: type, payload: data })
     }
 
+    // Each handler is isolated in its own try/catch so a failure in one handler
+    // does not prevent other handlers from running or cause Square to retry the event.
     if (type === 'payment.updated') {
-      await handlePaymentUpdated(req, data.object)
+      try { await handlePaymentUpdated(req, data.object) } catch (err) {
+        req.payload.logger.error({ err, eventId, eventType: type }, 'payment.updated handler failed')
+      }
     }
 
     if (type === 'loyalty.account.updated') {
-      await handleLoyaltyAccountUpdated(req, data.object)
+      try { await handleLoyaltyAccountUpdated(req, data.object) } catch (err) {
+        req.payload.logger.error({ err, eventId, eventType: type }, 'loyalty.account.updated handler failed')
+      }
     }
 
     if (type === 'order.updated') {
-      await handleOrderUpdated(req, data.object)
+      try { await handleOrderUpdated(req, data.object) } catch (err) {
+        req.payload.logger.error({ err, eventId, eventType: type }, 'order.updated handler failed')
+      }
     }
 
     if (type === 'inventory.count.updated') {
-      await handleInventoryCountUpdated(req, data.object)
+      try { await handleInventoryCountUpdated(req, data.object) } catch (err) {
+        req.payload.logger.error({ err, eventId, eventType: type }, 'inventory.count.updated handler failed')
+      }
     }
 
     if (type === 'catalog.version.updated') {
@@ -109,15 +130,21 @@ export function createWebhookHandler(options: PayloadPluginSquareConfig): Payloa
     }
 
     if (type === 'refund.updated') {
-      await handleRefundUpdated(req, data.object)
+      try { await handleRefundUpdated(req, data.object) } catch (err) {
+        req.payload.logger.error({ err, eventId, eventType: type }, 'refund.updated handler failed')
+      }
     }
 
     if (type === 'order.fulfillment.updated') {
-      await handleFulfillmentUpdated(req, data.object, options)
+      try { await handleFulfillmentUpdated(req, data.object, options) } catch (err) {
+        req.payload.logger.error({ err, eventId, eventType: type }, 'order.fulfillment.updated handler failed')
+      }
     }
 
     if (type === 'subscription.updated' || type === 'subscription.created') {
-      await handleSubscriptionUpdated(req, data.object)
+      try { await handleSubscriptionUpdated(req, data.object) } catch (err) {
+        req.payload.logger.error({ err, eventId, eventType: type }, 'subscription handler failed')
+      }
     }
 
     // Square retries delivery on any non-200 response
@@ -168,7 +195,6 @@ async function handlePaymentUpdated(
         data: { status: newStatus },
         overrideAccess: true,
       })
-
     }
   }
 }
@@ -248,7 +274,7 @@ async function handleLoyaltyAccountUpdated(
       data: { loyaltyPoints: balance, loyaltyAccountId: accountId },
       overrideAccess: true,
     })
-    req.payload.logger.info(`Loyalty balance synced: account ${accountId} → ${balance} pts`)
+    req.payload.logger.info({ accountId, balance }, 'Loyalty balance synced')
   }
 }
 
@@ -266,7 +292,7 @@ function handleCatalogVersionUpdated(
     payload: req.payload,
   })
     .then(({ synced }) => {
-      req.payload.logger.info(`catalog.version.updated sync complete — ${synced} item(s) updated`)
+      req.payload.logger.info({ synced }, 'catalog.version.updated sync complete')
       if (synced > 0) broadcastCatalogUpdate()
     })
     .catch((err: unknown) => {
@@ -309,7 +335,8 @@ async function handleRefundUpdated(
   })
 
   req.payload.logger.info(
-    `Refund processed: order ${order.id as string} → ${newStatus} (refunded ${refundAmount} of ${orderTotal})`,
+    { orderId: order.id, newStatus, refundAmount, orderTotal },
+    'Refund processed',
   )
 }
 
@@ -358,20 +385,16 @@ async function handleFulfillmentUpdated(
 
   try {
     const client = createSquareClient(options.accessToken, options.environment ?? 'sandbox')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const orderResp = await (client.orders as any).retrieve(squareOrderId)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const fullOrder = (orderResp as any).order
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const fulfillment = (fullOrder?.fulfillments as any[] | undefined)?.find(
-      (f: { uid?: string }) => !storedUid || f.uid === storedUid,
+    const orderResp = await (client.orders as unknown as SquareOrdersAPI).retrieve(squareOrderId)
+    const fulfillment = orderResp.order?.fulfillments?.find(
+      (f) => !storedUid || f.uid === storedUid,
     )
     const shipmentDetails = fulfillment?.shipmentDetails
     trackingNumber = shipmentDetails?.trackingNumber
     trackingUrl = shipmentDetails?.trackingUrl
     carrier = shipmentDetails?.carrier
   } catch (err) {
-    req.payload.logger.warn({ msg: 'Failed to retrieve Square order for fulfillment details', err })
+    req.payload.logger.warn({ err }, 'Failed to retrieve Square order for fulfillment details')
   }
 
   await req.payload.update({
@@ -387,7 +410,8 @@ async function handleFulfillmentUpdated(
   })
 
   req.payload.logger.info(
-    `Fulfillment updated: order ${orderId} → ${newFulfillmentStatus ?? 'unchanged'}${trackingNumber ? ` (tracking: ${trackingNumber})` : ''}`,
+    { orderId, newFulfillmentStatus, trackingNumber },
+    'Fulfillment updated',
   )
 }
 
@@ -419,7 +443,7 @@ async function handleSubscriptionUpdated(
       },
       overrideAccess: true,
     })
-    req.payload.logger.info(`Subscription ${squareSubscriptionId} → ${status ?? 'unchanged'}`)
+    req.payload.logger.info({ squareSubscriptionId, status }, 'Subscription updated')
   }
 }
 
@@ -434,55 +458,50 @@ async function handleInventoryCountUpdated(
     quantity?: string
   }
 
-  req.payload.logger.info({ object }, 'inventory.count.updated received')
-
   const counts = ((object as { inventory_counts?: RawCount[] }).inventory_counts ?? []).filter(
     (c) => c.catalog_object_type === 'ITEM_VARIATION' && c.state === 'IN_STOCK' && c.catalog_object_id,
   )
 
-  req.payload.logger.info(`inventory.count.updated: ${counts.length} IN_STOCK variation(s) to process`)
+  req.payload.logger.info({ count: counts.length }, 'inventory.count.updated received')
+
+  if (counts.length === 0) return
+
+  // Fetch all catalog items once before the loop to avoid N+1 queries
+  const all = await req.payload.find({
+    collection: 'catalog',
+    overrideAccess: true,
+    pagination: false,
+    limit: 0,
+  })
 
   for (const count of counts) {
     const variationSquareId = count.catalog_object_id!
-    const newQuantity = count.quantity ? parseFloat(count.quantity) : 0
-
-    req.payload.logger.info(`Looking for variation squareId=${variationSquareId} qty=${newQuantity}`)
-
-    // Fetch all items and match in memory — more reliable than nested array queries.
-    // pagination: false returns every document without a hard limit.
-    const all = await req.payload.find({
-      collection: 'catalog',
-      overrideAccess: true,
-      pagination: false,
-      limit: 0,
-    })
+    const newQuantity = count.quantity !== undefined ? parseFloat(count.quantity) : 0
 
     const result = all.docs.find((doc) =>
       (doc.variations as Array<{ squareId: string }>).some((v) => v.squareId === variationSquareId),
     )
 
-    req.payload.logger.info(`Found catalog item: ${result ? result.id : 'none'}`)
+    if (!result) {
+      req.payload.logger.info({ variationSquareId }, 'No catalog item found for variation')
+      continue
+    }
 
-    if (!result) continue
-
-    const item = result
     type Variation = { id?: string; squareId: string; inventoryCount?: number; [key: string]: unknown }
 
-    const updatedVariations = (item.variations as Variation[]).map((v) =>
+    const updatedVariations = (result.variations as Variation[]).map((v) =>
       v.squareId === variationSquareId ? { ...v, inventoryCount: newQuantity } : v,
     )
 
     await req.payload.update({
       collection: 'catalog',
-      id: item.id,
+      id: result.id,
       data: { variations: updatedVariations },
       overrideAccess: true,
     })
 
     broadcastInventoryUpdate(variationSquareId, newQuantity)
 
-    req.payload.logger.info(
-      `Inventory updated: variation ${variationSquareId} → ${newQuantity}`,
-    )
+    req.payload.logger.info({ variationSquareId, newQuantity }, 'Inventory updated')
   }
 }

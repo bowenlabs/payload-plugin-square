@@ -46,6 +46,24 @@ export { defaultIsAdmin } from './lib/accessControl.js'
 export const payloadPluginSquare =
   (pluginOptions: PayloadPluginSquareConfig) =>
   (config: Config): Config => {
+    if (!pluginOptions.disabled) {
+      if (!pluginOptions.accessToken) {
+        throw new Error('[payload-plugin-square] accessToken is required')
+      }
+      if (
+        !pluginOptions.locationId ||
+        (Array.isArray(pluginOptions.locationId) && pluginOptions.locationId.length === 0)
+      ) {
+        throw new Error('[payload-plugin-square] locationId is required')
+      }
+      const { endpoints: endpointOptions = {} } = pluginOptions
+      if (endpointOptions.webhook !== false && !pluginOptions.webhookSecret) {
+        console.warn(
+          '[payload-plugin-square] webhookSecret is not set — the webhook endpoint will reject all incoming events',
+        )
+      }
+    }
+
     const mediaCollectionSlug = pluginOptions.mediaCollectionSlug ?? 'media'
     const isAdmin = pluginOptions.isAdmin ?? defaultIsAdmin
 

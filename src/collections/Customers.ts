@@ -11,7 +11,7 @@ export const createCustomersCollection = (
     defaultColumns: ['displayName', 'email', 'loyaltyPoints', 'createdAt'],
     group: 'Square',
     description:
-      'Square customer records. Created automatically at checkout for guests and logged-in users. Loyalty balance is synced from Square via webhook.',
+      'Customer profiles created automatically at checkout. Each record links a Payload user (or guest email) to their Square customer ID, loyalty account, and order history. Read-only — data is managed by the plugin.',
   },
   access: {
     read: adminOrSelfAccess(isAdmin, (userId) => ({ user: { equals: userId } })),
@@ -25,7 +25,7 @@ export const createCustomersCollection = (
       type: 'text',
       unique: true,
       index: true,
-      admin: { position: 'sidebar', readOnly: true, description: 'Square customer ID' },
+      admin: { position: 'sidebar', readOnly: true, description: 'Square customer ID — look this up in your Square Dashboard under Customers' },
     },
     {
       name: 'loyaltyAccountId',
@@ -34,7 +34,7 @@ export const createCustomersCollection = (
       admin: {
         position: 'sidebar',
         readOnly: true,
-        description: 'Square Loyalty account ID — set on first checkout when loyalty is enabled',
+        description: 'Square Loyalty account ID. Created the first time a customer opts in to the loyalty program at checkout.',
       },
     },
     {
@@ -43,13 +43,13 @@ export const createCustomersCollection = (
       relationTo: 'users',
       required: false,
       index: true,
-      admin: { position: 'sidebar', description: 'Linked Payload user — null for guest customers' },
+      admin: { position: 'sidebar', description: 'Linked Payload user account. Empty for guest customers who checked out without signing in.' },
     },
     {
       name: 'email',
       type: 'email',
       index: true,
-      admin: { description: 'Used to identify and merge guest customers' },
+      admin: { description: 'Email address used to identify guest customers and link their orders across sessions.' },
     },
     {
       name: 'displayName',
@@ -62,7 +62,7 @@ export const createCustomersCollection = (
       admin: {
         position: 'sidebar',
         readOnly: true,
-        description: 'Current point balance — synced from Square via loyalty.account.updated webhook',
+        description: 'Current loyalty point balance. Updated automatically via Square webhook whenever points are earned or redeemed.',
       },
     },
   ],

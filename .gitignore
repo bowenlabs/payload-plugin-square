@@ -54,8 +54,3 @@ next-env.d.ts
 *.db-shm
 *.db-wal
 
-# Playwright
-/test-results/
-/playwright-report/
-/blob-report/
-/playwright/.cache/

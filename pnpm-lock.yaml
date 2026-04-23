@@ -36,9 +36,6 @@ importers:
       '@payloadcms/ui':
         specifier: 3.82.1
         version: 3.82.1(@types/react@19.2.14)(monaco-editor@0.55.1)(next@16.2.3(@babel/core@7.29.0)(@playwright/test@1.58.2)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(sass@1.77.4))(payload@3.82.1(graphql@16.13.2)(typescript@5.7.3))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(typescript@5.7.3)
-      '@playwright/test':
-        specifier: 1.58.2
-        version: 1.58.2
       '@swc-node/register':
         specifier: 1.10.9
         version: 1.10.9(@swc/core@1.15.30)(@swc/types@0.1.26)(typescript@5.7.3)
@@ -7265,6 +7262,7 @@ snapshots:
   '@playwright/test@1.58.2':
     dependencies:
       playwright: 1.58.2
+    optional: true
 
   '@preact/signals-core@1.14.1': {}
 
@@ -10583,13 +10581,15 @@ snapshots:
     optionalDependencies:
       '@napi-rs/nice': 1.1.1
 
-  playwright-core@1.58.2: {}
+  playwright-core@1.58.2:
+    optional: true
 
   playwright@1.58.2:
     dependencies:
       playwright-core: 1.58.2
     optionalDependencies:
       fsevents: 2.3.2
+    optional: true
 
   pluralize@8.0.0: {}
 

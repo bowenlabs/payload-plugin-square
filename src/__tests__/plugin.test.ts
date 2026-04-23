@@ -6,6 +6,7 @@ import { payloadPluginSquare } from '../index.js'
 const baseOptions = {
   accessToken: 'test-access-token',
   locationId: 'LOC_TEST',
+  webhookSecret: 'test-webhook-secret',
 }
 
 /** Returns a fresh minimal config each call — prevents mutation leaking between tests. */

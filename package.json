@@ -43,7 +43,6 @@
     "lint": "eslint",
     "lint:fix": "eslint ./src --fix",
     "test": "pnpm test:int",
-    "test:e2e": "playwright test",
     "test:int": "vitest"
   },
   "devDependencies": {
@@ -55,7 +54,6 @@
     "@payloadcms/next": "3.82.1",
     "@payloadcms/richtext-lexical": "3.82.1",
     "@payloadcms/ui": "3.82.1",
-    "@playwright/test": "1.58.2",
     "@swc-node/register": "1.10.9",
     "@swc/cli": "0.6.0",
     "@types/node": "22.19.9",

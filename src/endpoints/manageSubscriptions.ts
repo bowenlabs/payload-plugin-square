@@ -2,6 +2,7 @@ import type { PayloadHandler } from 'payload'
 import { SquareError } from 'square'
 
 import { createSquareClient } from '../lib/squareClient.js'
+import type { SquareSubscriptionsAPI } from '../lib/squareTypes.js'
 import type { PayloadPluginSquareConfig } from '../types.js'
 
 /**
@@ -31,18 +32,29 @@ export function createListSubscriptionsHandler(options: PayloadPluginSquareConfi
     const userId = (req.user as { id: string }).id
     const customerId = await resolveCustomerId(req, userId)
     if (!customerId) {
-      return Response.json({ subscriptions: [], totalDocs: 0 })
+      return Response.json({ subscriptions: [], totalDocs: 0, hasMore: false })
     }
+
+    const url = new URL(req.url)
+    const page = Math.max(1, parseInt(url.searchParams.get('page') ?? '1', 10))
+    const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') ?? '20', 10)))
 
     const result = await req.payload.find({
       collection: 'square-subscriptions',
       where: { customer: { equals: customerId } },
       overrideAccess: true,
-      limit: 50,
+      limit,
+      page,
       sort: '-createdAt',
     })
 
-    return Response.json({ subscriptions: result.docs, totalDocs: result.totalDocs })
+    return Response.json({
+      subscriptions: result.docs,
+      totalDocs: result.totalDocs,
+      totalPages: result.totalPages,
+      page: result.page,
+      hasMore: result.hasNextPage,
+    })
   }
 }
 
@@ -73,11 +85,11 @@ export function createCancelSubscriptionHandler(options: PayloadPluginSquareConf
     }
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (client.subscriptions as any).cancelSubscription(body.subscriptionId)
+      await (client.subscriptions as unknown as SquareSubscriptionsAPI).cancelSubscription(body.subscriptionId)
     } catch (err) {
       if (err instanceof SquareError) {
-        return Response.json({ error: 'Failed to cancel subscription', details: err.message }, { status: 502 })
+        req.payload.logger.error({ err }, 'Failed to cancel subscription')
+        return Response.json({ error: 'Failed to cancel subscription' }, { status: 502 })
       }
       throw err
     }
@@ -120,15 +132,15 @@ export function createPauseSubscriptionHandler(options: PayloadPluginSquareConfi
     }
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (client.subscriptions as any).pauseSubscription(body.subscriptionId, {
+      await (client.subscriptions as unknown as SquareSubscriptionsAPI).pauseSubscription(body.subscriptionId, {
         pause: {
-          effectiveDate: body.effectiveDate ?? new Date().toISOString().split('T')[0],
+          effectiveDate: body.effectiveDate ?? new Date().toISOString().split('T')[0]!,
         },
       })
     } catch (err) {
       if (err instanceof SquareError) {
-        return Response.json({ error: 'Failed to pause subscription', details: err.message }, { status: 502 })
+        req.payload.logger.error({ err }, 'Failed to pause subscription')
+        return Response.json({ error: 'Failed to pause subscription' }, { status: 502 })
       }
       throw err
     }
@@ -171,13 +183,13 @@ export function createResumeSubscriptionHandler(options: PayloadPluginSquareConf
     }
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (client.subscriptions as any).resumeSubscription(body.subscriptionId, {
-        resumeEffectiveDate: body.resumeEffectiveDate ?? new Date().toISOString().split('T')[0],
+      await (client.subscriptions as unknown as SquareSubscriptionsAPI).resumeSubscription(body.subscriptionId, {
+        resumeEffectiveDate: body.resumeEffectiveDate ?? new Date().toISOString().split('T')[0]!,
       })
     } catch (err) {
       if (err instanceof SquareError) {
-        return Response.json({ error: 'Failed to resume subscription', details: err.message }, { status: 502 })
+        req.payload.logger.error({ err }, 'Failed to resume subscription')
+        return Response.json({ error: 'Failed to resume subscription' }, { status: 502 })
       }
       throw err
     }

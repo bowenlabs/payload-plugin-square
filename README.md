@@ -296,7 +296,6 @@ Copy `dev/.env.example` to `dev/.env` and fill in your Square credentials.
 
 ```bash
 pnpm test:int   # unit tests (Vitest)
-pnpm test:e2e   # end-to-end tests (Playwright)
 ```
 
 > **Note:** Delete `dev/dev.db` whenever collection slugs change — SQLite will recreate the schema on next start.

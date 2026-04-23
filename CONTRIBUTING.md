@@ -128,10 +128,6 @@ On first start, visit `http://localhost:3000/admin` and follow the "Create first
 ```bash
 # Unit tests (Vitest — no Square credentials needed)
 pnpm test:int
-
-# End-to-end tests (Playwright — requires the dev app to be running)
-pnpm dev &
-pnpm test:e2e
 ```
 
 Unit tests live in `src/__tests__/` and mock all external dependencies. They cover:

@@ -3,6 +3,13 @@ import { SquareError } from 'square'
 
 import { primaryLocation } from '../lib/locationUtils.js'
 import { createSquareClient } from '../lib/squareClient.js'
+import type {
+  SquareCardCreateResponse,
+  SquareCustomerCreateResponse,
+  SquareCustomerSearchResponse,
+  SquareSubscriptionPlanVariationData,
+  SquareSubscriptionsAPI,
+} from '../lib/squareTypes.js'
 import type { PayloadPluginSquareConfig } from '../types.js'
 
 export function createSubscribeHandler(options: PayloadPluginSquareConfig): PayloadHandler {
@@ -16,6 +23,7 @@ export function createSubscribeHandler(options: PayloadPluginSquareConfig): Payl
       userId?: string
       guestEmail?: string
       startDate?: string
+      idempotencyKey?: string
     }
     try {
       const raw = (await req.text?.()) ?? ''
@@ -25,6 +33,7 @@ export function createSubscribeHandler(options: PayloadPluginSquareConfig): Payl
     }
 
     const { sourceId, planVariationId, userId, guestEmail, startDate } = body ?? {}
+    const idempotencyKey = body.idempotencyKey ?? crypto.randomUUID()
 
     if (!sourceId) {
       return Response.json({ error: 'sourceId (Square payment token) is required' }, { status: 400 })
@@ -34,6 +43,19 @@ export function createSubscribeHandler(options: PayloadPluginSquareConfig): Payl
     }
     if (!userId && !guestEmail) {
       return Response.json({ error: 'userId or guestEmail is required' }, { status: 400 })
+    }
+
+    // Idempotency check: if a subscription was already created with this key, return it
+    if (body.idempotencyKey) {
+      const existingByKey = await req.payload.find({
+        collection: 'square-subscriptions',
+        where: { idempotencyKey: { equals: body.idempotencyKey } },
+        limit: 1,
+        overrideAccess: true,
+      })
+      if (existingByKey.docs.length > 0) {
+        return Response.json({ subscription: existingByKey.docs[0] }, { status: 200 })
+      }
     }
 
     // ── Step 1: Find or create Square customer ────────────────────────────────
@@ -56,24 +78,21 @@ export function createSubscribeHandler(options: PayloadPluginSquareConfig): Payl
     if (!squareCustomerId) {
       try {
         if (guestEmail) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const searchResp = await (client.customers as any).search({
+          const searchResp = (await client.customers.search({
             query: { filter: { emailAddress: { exact: guestEmail } } },
-          })
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          squareCustomerId = (searchResp as any).customers?.[0]?.id
+          })) as unknown as SquareCustomerSearchResponse
+          squareCustomerId = searchResp.customers?.[0]?.id
         }
 
         if (!squareCustomerId) {
-          const createResp = await client.customers.create({
+          const createResp = (await client.customers.create({
             emailAddress: guestEmail,
             idempotencyKey: crypto.randomUUID(),
-          })
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          squareCustomerId = (createResp as any).customer?.id
+          })) as unknown as SquareCustomerCreateResponse
+          squareCustomerId = createResp.customer?.id
         }
       } catch (err) {
-        req.payload.logger.warn({ msg: 'Failed to find/create Square customer', err })
+        req.payload.logger.warn({ err }, 'Failed to find/create Square customer')
         return Response.json({ error: 'Failed to create customer record' }, { status: 502 })
       }
     }
@@ -95,7 +114,7 @@ export function createSubscribeHandler(options: PayloadPluginSquareConfig): Payl
         overrideAccess: true,
       })
       payloadCustomerId = newCustomer.id as string
-    } else if (!existing.docs[0]?.squareCustomerId) {
+    } else if (!existing.docs[0]!.squareCustomerId) {
       await req.payload.update({
         collection: 'customers',
         id: payloadCustomerId,
@@ -109,22 +128,22 @@ export function createSubscribeHandler(options: PayloadPluginSquareConfig): Payl
     // We tokenize in the browser via Web Payments SDK, then save to Square's vault here.
     let squareCardId: string
     try {
-      const cardResp = await client.cards.create({
+      const cardResp = (await client.cards.create({
         idempotencyKey: crypto.randomUUID(),
         sourceId,
         card: {
           customerId: squareCustomerId,
         },
-      })
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const cardId = (cardResp as any).card?.id
+      })) as unknown as SquareCardCreateResponse
+      const cardId = cardResp.card?.id
       if (!cardId) {
         return Response.json({ error: 'Failed to save card on file' }, { status: 502 })
       }
-      squareCardId = cardId as string
+      squareCardId = cardId
     } catch (err) {
       if (err instanceof SquareError) {
-        return Response.json({ error: 'Failed to save card', details: err.message }, { status: 402 })
+        req.payload.logger.error({ err }, 'Failed to save card on file')
+        return Response.json({ error: 'Failed to save card' }, { status: 402 })
       }
       throw err
     }
@@ -139,8 +158,7 @@ export function createSubscribeHandler(options: PayloadPluginSquareConfig): Payl
       const catalogResp = await client.catalog.batchGet({ objectIds: [planVariationId] })
       const variation = catalogResp.objects?.[0]
       if (variation?.type === 'SUBSCRIPTION_PLAN_VARIATION') {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const vd = (variation as any).subscriptionPlanVariationData
+        const vd = (variation as unknown as { subscriptionPlanVariationData?: SquareSubscriptionPlanVariationData }).subscriptionPlanVariationData
         planName = vd?.name
         const firstPhase = vd?.phases?.[0]
         cadence = firstPhase?.cadence
@@ -157,26 +175,26 @@ export function createSubscribeHandler(options: PayloadPluginSquareConfig): Payl
     let chargedThroughDate: string | undefined
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const subResp = await (client.subscriptions as any).createSubscription({
-        idempotencyKey: crypto.randomUUID(),
+      const subResp = await (client.subscriptions as unknown as SquareSubscriptionsAPI).createSubscription({
+        idempotencyKey,
         locationId,
         planVariationId,
         customerId: squareCustomerId,
         cardId: squareCardId,
-        startDate: startDate ?? new Date().toISOString().split('T')[0],
+        startDate: startDate ?? new Date().toISOString().split('T')[0]!,
       })
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const sub = (subResp as any).subscription
+      const sub = subResp.subscription
       if (!sub?.id) {
-        return Response.json({ error: 'Square subscription creation failed', details: subResp.errors }, { status: 502 })
+        req.payload.logger.error({ errors: subResp.errors }, 'Square subscription creation returned no subscription')
+        return Response.json({ error: 'Failed to create subscription' }, { status: 502 })
       }
-      squareSubscriptionId = sub.id as string
-      subscriptionStatus = sub.status as string
-      chargedThroughDate = sub.chargedThroughDate as string | undefined
+      squareSubscriptionId = sub.id
+      subscriptionStatus = sub.status
+      chargedThroughDate = sub.chargedThroughDate
     } catch (err) {
       if (err instanceof SquareError) {
-        return Response.json({ error: 'Failed to create subscription', details: err.message }, { status: 502 })
+        req.payload.logger.error({ err }, 'Failed to create Square subscription')
+        return Response.json({ error: 'Failed to create subscription' }, { status: 502 })
       }
       throw err
     }
@@ -198,6 +216,7 @@ export function createSubscribeHandler(options: PayloadPluginSquareConfig): Payl
         squareCardId,
         customer: payloadCustomerId,
         userId: userId ?? undefined,
+        idempotencyKey,
       },
       overrideAccess: true,
     })
