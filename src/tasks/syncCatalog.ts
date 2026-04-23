@@ -100,7 +100,7 @@ export async function syncCatalog({
     // Resolve image — skip re-download if squareImageId hasn't changed
     const primaryImageId = item.itemData?.imageIds?.[0]
     const existing = await payload.find({
-      collection: 'square-catalog-items',
+      collection: 'catalog',
       where: { squareId: { equals: item.id } },
       limit: 1,
     })
@@ -141,13 +141,13 @@ export async function syncCatalog({
 
     if (existingDoc) {
       await payload.update({
-        collection: 'square-catalog-items',
+        collection: 'catalog',
         id: existingDoc.id,
         data,
       })
     } else {
       await payload.create({
-        collection: 'square-catalog-items',
+        collection: 'catalog',
         data,
       })
     }

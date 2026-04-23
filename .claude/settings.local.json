@@ -16,7 +16,11 @@
       "Bash(find node_modules/.pnpm/square@44* -path \"*/api/types/CatalogObjectImage.d.ts\")",
       "Bash(find node_modules/.pnpm/square@44* -path \"*/api/types/CatalogImage.d.ts\")",
       "Bash(find node_modules/.pnpm/square@44* -path \"*/api/types/BatchGetCatalogObjectsResponse.d.ts\")",
-      "Bash(find node_modules/.pnpm/square@44* -path \"*/core/fetcher/HttpResponsePromise.d.ts\")"
+      "Bash(find node_modules/.pnpm/square@44* -path \"*/core/fetcher/HttpResponsePromise.d.ts\")",
+      "Bash(node -e \"const sq = require\\('square'\\); console.log\\('WebhooksHelper' in sq, 'SquareError' in sq\\)\")",
+      "Bash(curl -s \"http://localhost:3000/api/square-catalog-items?limit=1&depth=1\")",
+      "Bash(node -e \"const d=require\\('fs'\\).readFileSync\\('/dev/stdin','utf8'\\); const j=JSON.parse\\(d\\); const doc=j.docs?.[0]; console.log\\('image field:', JSON.stringify\\(doc?.image, null, 2\\)\\); console.log\\('variations:', JSON.stringify\\(doc?.variations, null, 2\\)\\)\")",
+      "Bash(npx tsc *)"
     ]
   }
 }

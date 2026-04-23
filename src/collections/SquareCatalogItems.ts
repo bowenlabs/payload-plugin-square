@@ -3,10 +3,18 @@ import type { CollectionConfig, CollectionSlug } from 'payload'
 export const createSquareCatalogItemsCollection = (
   mediaCollectionSlug: string = 'media',
 ): CollectionConfig => ({
-  slug: 'square-catalog-items',
+  slug: 'catalog',
+  access: {
+    read: () => true,
+    create: () => false,
+    update: () => false,
+    delete: () => false,
+  },
   admin: {
     useAsTitle: 'name',
     defaultColumns: ['name', 'type', 'lastSyncedAt', 'updatedAt'],
+    group: 'Square',
+    description: 'Read-only. Data is managed by Square and synced via the Square API.',
   },
   fields: [
     {

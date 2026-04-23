@@ -29,6 +29,7 @@ export default buildConfig({
     },
     {
       slug: 'media',
+      access: { read: () => true },
       fields: [],
       upload: {
         staticDir: path.resolve(dirname, 'media'),
@@ -48,8 +49,9 @@ export default buildConfig({
   plugins: [
     payloadPluginSquare({
       accessToken: process.env.SQUARE_ACCESS_TOKEN || '',
+      locationId: process.env.SQUARE_LOCATION_ID || '',
       environment: (process.env.SQUARE_ENVIRONMENT as 'sandbox' | 'production') || 'sandbox',
-      locationId: process.env.SQUARE_LOCATION_ID,
+      webhookSecret: process.env.SQUARE_WEBHOOK_SECRET,
       syncOnInit: true,
     }),
   ],

@@ -1,26 +1,27 @@
 import type { Config } from 'payload'
 
+import { Orders } from './collections/Orders.js'
 import { createSquareCatalogItemsCollection } from './collections/SquareCatalogItems.js'
+import { SquarePayments } from './collections/SquarePayments.js'
+import { createCheckoutHandler } from './endpoints/checkout.js'
+import { inventoryStreamHandler } from './endpoints/inventoryStream.js'
 import { makeSyncHandler } from './endpoints/syncEndpoint.js'
+import { createWebhookHandler } from './endpoints/webhook.js'
 import { syncCatalog } from './tasks/syncCatalog.js'
+import type { PayloadPluginSquareConfig } from './types.js'
 
-export type PayloadPluginSquareConfig = {
-  /** Square API access token */
-  accessToken: string
-  /** Defaults to 'sandbox' */
-  environment?: 'sandbox' | 'production'
-  /** Square location ID — required for fetching inventory counts per variation */
-  locationId?: string
-  /** Payload collection slug for storing synced images. Defaults to 'media' */
-  mediaCollectionSlug?: string
-  /** Run a full catalog sync when Payload initializes */
-  syncOnInit?: boolean
-  /**
-   * Keep the collection in the schema while disabling all Square API activity.
-   * Useful for environments where Square credentials are unavailable (e.g. CI).
-   */
-  disabled?: boolean
-}
+export type { PayloadPluginSquareConfig } from './types.js'
+export type {
+  AfterCheckoutContext,
+  BeforeCheckoutContext,
+  Cart,
+  CartItem,
+  Order,
+  OrderLineItem,
+  SquarePayment,
+  SyncContext,
+  WebhookContext,
+} from './types.js'
 
 export const payloadPluginSquare =
   (pluginOptions: PayloadPluginSquareConfig) =>
@@ -31,8 +32,12 @@ export const payloadPluginSquare =
       config.collections = []
     }
 
-    // Always add the collection so the DB schema stays consistent
-    config.collections.push(createSquareCatalogItemsCollection(mediaCollectionSlug))
+    // Always register collections so the DB schema stays consistent across environments
+    config.collections.push(
+      createSquareCatalogItemsCollection(mediaCollectionSlug),
+      Orders,
+      SquarePayments,
+    )
 
     if (pluginOptions.disabled) {
       return config
@@ -42,16 +47,42 @@ export const payloadPluginSquare =
       config.endpoints = []
     }
 
+    const { endpoints: endpointOptions = {} } = pluginOptions
+
+    if (endpointOptions.checkout !== false) {
+      config.endpoints.push({
+        path: '/square/checkout',
+        method: 'post',
+        handler: createCheckoutHandler(pluginOptions),
+      })
+    }
+
+    if (endpointOptions.webhook !== false) {
+      config.endpoints.push({
+        path: '/square/webhook',
+        method: 'post',
+        handler: createWebhookHandler(pluginOptions),
+      })
+    }
+
     config.endpoints.push({
-      handler: makeSyncHandler({
-        accessToken: pluginOptions.accessToken,
-        environment: pluginOptions.environment,
-        locationId: pluginOptions.locationId,
-        mediaCollectionSlug,
-      }),
-      method: 'post',
-      path: '/square/sync',
+      path: '/square/inventory-stream',
+      method: 'get',
+      handler: inventoryStreamHandler,
     })
+
+    if (endpointOptions.sync !== false) {
+      config.endpoints.push({
+        path: '/square/sync',
+        method: 'post',
+        handler: makeSyncHandler({
+          accessToken: pluginOptions.accessToken,
+          environment: pluginOptions.environment,
+          locationId: pluginOptions.locationId,
+          mediaCollectionSlug,
+        }),
+      })
+    }
 
     if (pluginOptions.syncOnInit) {
       const incomingOnInit = config.onInit
