@@ -3,10 +3,12 @@ import type { Config } from 'payload'
 import { Orders } from './collections/Orders.js'
 import { createSquareCatalogItemsCollection } from './collections/SquareCatalogItems.js'
 import { SquarePayments } from './collections/SquarePayments.js'
+import { SquareWebhookEvents } from './collections/SquareWebhookEvents.js'
 import { createCheckoutHandler } from './endpoints/checkout.js'
 import { inventoryStreamHandler } from './endpoints/inventoryStream.js'
 import { makeSyncHandler } from './endpoints/syncEndpoint.js'
 import { createWebhookHandler } from './endpoints/webhook.js'
+import { primaryLocation } from './lib/locationUtils.js'
 import { syncCatalog } from './tasks/syncCatalog.js'
 import type { PayloadPluginSquareConfig } from './types.js'
 
@@ -37,6 +39,7 @@ export const payloadPluginSquare =
       createSquareCatalogItemsCollection(mediaCollectionSlug),
       Orders,
       SquarePayments,
+      SquareWebhookEvents,
     )
 
     if (pluginOptions.disabled) {
@@ -82,6 +85,42 @@ export const payloadPluginSquare =
           mediaCollectionSlug,
         }),
       })
+    }
+
+    if (pluginOptions.syncSchedule) {
+      const taskSlug = 'square-catalog-sync'
+      const locationId = pluginOptions.locationId
+
+      if (!config.jobs) config.jobs = {}
+      config.jobs.tasks = [
+        ...(config.jobs.tasks ?? []),
+        {
+          slug: taskSlug,
+          retries: 1,
+          outputSchema: [{ name: 'synced', type: 'number' as const }],
+          handler: async ({ req }: { req: import('payload').PayloadRequest; job: unknown }) => {
+            const { synced } = await syncCatalog({
+              accessToken: pluginOptions.accessToken,
+              environment: pluginOptions.environment,
+              locationId,
+              mediaCollectionSlug,
+              payload: req.payload,
+            })
+            req.payload.logger.info(`Scheduled Square catalog sync complete — ${synced} items synced`)
+            return { output: { synced } }
+          },
+        },
+      ]
+      const newAutoRun = { cron: pluginOptions.syncSchedule, limit: 1, task: taskSlug }
+      const existingAutoRun = config.jobs.autoRun
+      if (typeof existingAutoRun === 'function') {
+        config.jobs.autoRun = async (payload) => {
+          const resolved = await existingAutoRun(payload)
+          return [...resolved, newAutoRun]
+        }
+      } else {
+        config.jobs.autoRun = [...(existingAutoRun ?? []), newAutoRun]
+      }
     }
 
     if (pluginOptions.syncOnInit) {

@@ -1,12 +1,15 @@
 import type { PayloadHandler } from 'payload'
 import { SquareError } from 'square'
 
+import { primaryLocation, allLocations } from '../lib/locationUtils.js'
 import { createSquareClient } from '../lib/squareClient.js'
 import type { Cart, Order, PayloadPluginSquareConfig, SquarePayment } from '../types.js'
 
 export function createCheckoutHandler(options: PayloadPluginSquareConfig): PayloadHandler {
   return async (req) => {
     const { accessToken, locationId, environment = 'sandbox', hooks } = options
+    const locationIdPrimary = primaryLocation(locationId)
+    const locationIds = allLocations(locationId)
     const client = createSquareClient(accessToken, environment)
 
     let body: { cart: Cart; sourceId: string }
@@ -92,7 +95,7 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       const inventoryMap = new Map<string, number>()
       for await (const count of await client.inventory.batchGetCounts({
         catalogObjectIds: variationIds,
-        locationIds: [locationId],
+        locationIds,
       })) {
         if (count.catalogObjectId && count.quantity) {
           inventoryMap.set(count.catalogObjectId, parseFloat(count.quantity))
@@ -128,7 +131,7 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       const orderResponse = await client.orders.create({
         idempotencyKey: crypto.randomUUID(),
         order: {
-          locationId,
+          locationId: locationIdPrimary,
           lineItems: cart.items.map((item) => ({
             catalogObjectId: item.variationId,
             quantity: String(item.quantity),
@@ -165,7 +168,7 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
           currency: squareOrder.totalMoney?.currency ?? 'USD',
         },
         orderId: squareOrder.id,
-        locationId,
+        locationId: locationIdPrimary,
       })
       if (!paymentResponse.payment) {
         return Response.json(
@@ -259,7 +262,36 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       })
     }
 
-    // ── Step 7: afterCheckout hook ──────────────────────────────────────────
+    // ── Step 7: Guest order confirmation email (non-fatal) ─────────────────
+    if (cart.guestEmail) {
+      try {
+        const lineItemsHtml = enrichedLineItems
+          .map(
+            (li) =>
+              `<tr><td>${li.productName}</td><td style="text-align:center">${li.quantity}</td><td style="text-align:right">$${(li.totalPrice / 100).toFixed(2)}</td></tr>`,
+          )
+          .join('')
+        await req.payload.sendEmail({
+          to: cart.guestEmail,
+          subject: `Order ${payloadOrder.orderNumber} confirmed`,
+          html: `
+            <h2>Thanks for your order!</h2>
+            <p>Order <strong>${payloadOrder.orderNumber}</strong> has been placed.</p>
+            <table style="width:100%;border-collapse:collapse;margin:16px 0">
+              <thead><tr><th style="text-align:left">Item</th><th>Qty</th><th style="text-align:right">Total</th></tr></thead>
+              <tbody>${lineItemsHtml}</tbody>
+              <tfoot>
+                <tr><td colspan="2"><strong>Total</strong></td><td style="text-align:right"><strong>$${(Number(squareOrder.totalMoney?.amount ?? 0) / 100).toFixed(2)}</strong></td></tr>
+              </tfoot>
+            </table>
+          `,
+        })
+      } catch (emailErr) {
+        req.payload.logger.warn({ msg: 'Failed to send order confirmation email', err: emailErr })
+      }
+    }
+
+    // ── Step 8: afterCheckout hook ──────────────────────────────────────────
     if (hooks?.afterCheckout) {
       const paymentShape: SquarePayment = {
         id: squarePaymentObj.id!,
@@ -272,6 +304,7 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
       }
       await hooks.afterCheckout({ req, order: payloadOrder, payment: paymentShape })
     }
+
 
     return Response.json({ order: payloadOrder }, { status: 200 })
   }

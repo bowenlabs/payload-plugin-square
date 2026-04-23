@@ -1,5 +1,6 @@
 'use client'
 
+import { useRouter } from 'next/navigation'
 import Script from 'next/script'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -69,12 +70,12 @@ function OrderSummary({ items, total }: { items: CartItem[]; total: number }) {
 
 export function CheckoutForm({ applicationId, locationId }: Props) {
   const { items, total, clear } = useCart()
+  const router = useRouter()
   const cardRef = useRef<SquareCard | null>(null)
   const [status, setStatus] = useState<{ type: 'success' | 'error' | 'warning'; text: string } | null>(null)
   const [guestEmail, setGuestEmail] = useState('')
   const [loading, setLoading] = useState(false)
   const [cardReady, setCardReady] = useState(false)
-  const [orderNumber, setOrderNumber] = useState<string | null>(null)
 
   const initSquare = useCallback(async () => {
     if (!window.Square || !applicationId || cardRef.current) return
@@ -128,15 +129,16 @@ export function CheckoutForm({ applicationId, locationId }: Props) {
       })
 
       const data = (await response.json()) as {
-        order?: { orderNumber?: string }
+        order?: { id?: string; orderNumber?: string; [key: string]: unknown }
         error?: string
         warning?: string
       }
 
       if (response.ok && data.order) {
-        setOrderNumber(data.order.orderNumber ?? null)
-        setStatus({ type: 'success', text: `Order ${data.order.orderNumber} placed successfully!` })
         clear()
+        sessionStorage.setItem(`square_order_${data.order.id}`, JSON.stringify(data.order))
+        router.push(`/order/${data.order.id}`)
+        return
       } else if (data.warning) {
         setStatus({ type: 'warning', text: data.warning })
       } else {
@@ -154,16 +156,6 @@ export function CheckoutForm({ applicationId, locationId }: Props) {
       <div style={{ padding: 20, background: '#fef2f2', borderRadius: 8, color: '#b91c1c' }}>
         Add <code>NEXT_PUBLIC_SQUARE_APPLICATION_ID</code> to <code>dev/.env</code> to enable
         payments. Find it in your Square Developer Dashboard under your application.
-      </div>
-    )
-  }
-
-  if (orderNumber) {
-    return (
-      <div style={{ padding: 32, background: '#f0fdf4', borderRadius: 8, textAlign: 'center' }}>
-        <div style={{ fontSize: 48, marginBottom: 16 }}>✓</div>
-        <h2 style={{ margin: '0 0 8px' }}>Payment successful</h2>
-        <p style={{ margin: 0, color: '#374151' }}>Order <strong>{orderNumber}</strong> has been placed.</p>
       </div>
     )
   }

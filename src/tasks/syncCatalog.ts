@@ -1,12 +1,13 @@
 import type { BasePayload, CollectionSlug } from 'payload'
 import type { CatalogObject } from 'square'
 
+import { allLocations } from '../lib/locationUtils.js'
 import { createSquareClient } from '../lib/squareClient.js'
 
 type SyncOptions = {
   accessToken: string
   environment?: 'sandbox' | 'production'
-  locationId?: string
+  locationId?: string | string[]
   mediaCollectionSlug: string
   payload: BasePayload
 }
@@ -20,10 +21,23 @@ export async function syncCatalog({
 }: SyncOptions): Promise<{ synced: number }> {
   const client = createSquareClient(accessToken, environment)
 
+  // Delta sync: only fetch items modified since the last sync
+  const mostRecent = await payload.find({
+    collection: 'catalog',
+    limit: 1,
+    sort: '-lastSyncedAt',
+    overrideAccess: true,
+  })
+  const lastSyncedAt = mostRecent.docs[0]?.lastSyncedAt as string | undefined
+  // Subtract 5 min buffer to guard against clock skew between our server and Square
+  const beginTime = lastSyncedAt
+    ? new Date(new Date(lastSyncedAt).getTime() - 5 * 60 * 1000).toISOString()
+    : undefined
+
   // Collect all ITEM catalog objects via the async-iterable Page API
   const allItems: Extract<CatalogObject, { type: 'ITEM' }>[] = []
 
-  for await (const obj of await client.catalog.list({ types: 'ITEM' })) {
+  for await (const obj of await client.catalog.list({ types: 'ITEM', ...(beginTime ? { beginTime } : {}) })) {
     if (obj.type === 'ITEM') {
       allItems.push(obj as Extract<CatalogObject, { type: 'ITEM' }>)
     }
@@ -33,6 +47,7 @@ export async function syncCatalog({
   const inventoryByVariationId = new Map<string, number>()
 
   if (locationId && allItems.length > 0) {
+    const locationIds = allLocations(locationId)
     const variationIds: string[] = []
     for (const item of allItems) {
       for (const variation of item.itemData?.variations ?? []) {
@@ -44,7 +59,7 @@ export async function syncCatalog({
       for (const batch of chunkArray(variationIds, 1000)) {
         for await (const count of await client.inventory.batchGetCounts({
           catalogObjectIds: batch,
-          locationIds: [locationId],
+          locationIds,
         })) {
           if (count.catalogObjectId && count.quantity) {
             inventoryByVariationId.set(count.catalogObjectId, parseFloat(count.quantity))

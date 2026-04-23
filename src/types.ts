@@ -3,8 +3,8 @@ import type { PayloadRequest } from 'payload'
 export type PayloadPluginSquareConfig = {
   /** Square API access token */
   accessToken: string
-  /** Required for checkout and inventory counts */
-  locationId: string
+  /** Required for checkout and inventory counts. Pass an array for multi-location support — the first entry is used as the primary location for payments. */
+  locationId: string | string[]
   /** Defaults to 'sandbox' */
   environment?: 'sandbox' | 'production'
   /** Required to enable the webhook endpoint */
@@ -13,6 +13,8 @@ export type PayloadPluginSquareConfig = {
   mediaCollectionSlug?: string
   /** Run a full catalog sync when Payload initializes */
   syncOnInit?: boolean
+  /** Cron expression for scheduled catalog sync, e.g. '0 * * * *' for hourly */
+  syncSchedule?: string
   /**
    * Keep collections in the schema while disabling all Square API activity.
    * Useful for environments where Square credentials are unavailable (e.g. CI).

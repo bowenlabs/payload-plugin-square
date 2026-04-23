@@ -43,6 +43,11 @@ next-env.d.ts
 
 /dev/media
 
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
 # Playwright
 /test-results/
 /playwright-report/

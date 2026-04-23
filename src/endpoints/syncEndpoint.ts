@@ -5,7 +5,7 @@ import { syncCatalog } from '../tasks/syncCatalog.js'
 type MakeSyncHandlerOptions = {
   accessToken: string
   environment?: 'sandbox' | 'production'
-  locationId?: string
+  locationId?: string | string[]
   mediaCollectionSlug: string
 }
 

@@ -41,14 +41,33 @@ export function createWebhookHandler(options: PayloadPluginSquareConfig): Payloa
       return new Response('Invalid signature', { status: 401 })
     }
 
-    let event: { type: string; data: { object: Record<string, unknown> } }
+    let event: { event_id?: string; type: string; data: { object: Record<string, unknown> } }
     try {
       event = JSON.parse(rawBody) as typeof event
     } catch {
       return new Response('Invalid JSON', { status: 400 })
     }
 
-    const { type, data } = event
+    const { event_id: eventId, type, data } = event
+
+    // Replay protection — skip events we've already processed
+    if (eventId) {
+      const seen = await req.payload.find({
+        collection: 'square-webhook-events',
+        where: { eventId: { equals: eventId } },
+        limit: 1,
+        overrideAccess: true,
+      })
+      if (seen.docs.length > 0) {
+        req.payload.logger.info(`Square webhook duplicate skipped: ${eventId}`)
+        return new Response(null, { status: 200 })
+      }
+      await req.payload.create({
+        collection: 'square-webhook-events',
+        data: { eventId, eventType: type },
+        overrideAccess: true,
+      })
+    }
 
     if (hooks?.onWebhookReceived) {
       await hooks.onWebhookReceived({ req, eventType: type, payload: data })
