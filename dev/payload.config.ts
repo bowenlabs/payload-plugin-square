@@ -47,9 +47,10 @@ export default buildConfig({
   },
   plugins: [
     payloadPluginSquare({
-      collections: {
-        posts: true,
-      },
+      accessToken: process.env.SQUARE_ACCESS_TOKEN || '',
+      environment: (process.env.SQUARE_ENVIRONMENT as 'sandbox' | 'production') || 'sandbox',
+      locationId: process.env.SQUARE_LOCATION_ID,
+      syncOnInit: true,
     }),
   ],
   secret: process.env.PAYLOAD_SECRET || 'test-secret_key',

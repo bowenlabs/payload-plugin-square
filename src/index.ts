@@ -1,54 +1,39 @@
-import type { CollectionSlug, Config } from 'payload'
+import type { Config } from 'payload'
 
-import { customEndpointHandler } from './endpoints/customEndpointHandler.js'
+import { createSquareCatalogItemsCollection } from './collections/SquareCatalogItems.js'
+import { makeSyncHandler } from './endpoints/syncEndpoint.js'
+import { syncCatalog } from './tasks/syncCatalog.js'
 
 export type PayloadPluginSquareConfig = {
+  /** Square API access token */
+  accessToken: string
+  /** Defaults to 'sandbox' */
+  environment?: 'sandbox' | 'production'
+  /** Square location ID — required for fetching inventory counts per variation */
+  locationId?: string
+  /** Payload collection slug for storing synced images. Defaults to 'media' */
+  mediaCollectionSlug?: string
+  /** Run a full catalog sync when Payload initializes */
+  syncOnInit?: boolean
   /**
-   * List of collections to add a custom field
+   * Keep the collection in the schema while disabling all Square API activity.
+   * Useful for environments where Square credentials are unavailable (e.g. CI).
    */
-  collections?: Partial<Record<CollectionSlug, true>>
   disabled?: boolean
 }
 
 export const payloadPluginSquare =
   (pluginOptions: PayloadPluginSquareConfig) =>
   (config: Config): Config => {
+    const mediaCollectionSlug = pluginOptions.mediaCollectionSlug ?? 'media'
+
     if (!config.collections) {
       config.collections = []
     }
 
-    config.collections.push({
-      slug: 'plugin-collection',
-      fields: [
-        {
-          name: 'id',
-          type: 'text',
-        },
-      ],
-    })
+    // Always add the collection so the DB schema stays consistent
+    config.collections.push(createSquareCatalogItemsCollection(mediaCollectionSlug))
 
-    if (pluginOptions.collections) {
-      for (const collectionSlug in pluginOptions.collections) {
-        const collection = config.collections.find(
-          (collection) => collection.slug === collectionSlug,
-        )
-
-        if (collection) {
-          collection.fields.push({
-            name: 'addedByPlugin',
-            type: 'text',
-            admin: {
-              position: 'sidebar',
-            },
-          })
-        }
-      }
-    }
-
-    /**
-     * If the plugin is disabled, we still want to keep added collections/fields so the database schema is consistent which is important for migrations.
-     * If your plugin heavily modifies the database schema, you may want to remove this property.
-     */
     if (pluginOptions.disabled) {
       return config
     }
@@ -57,55 +42,37 @@ export const payloadPluginSquare =
       config.endpoints = []
     }
 
-    if (!config.admin) {
-      config.admin = {}
-    }
-
-    if (!config.admin.components) {
-      config.admin.components = {}
-    }
-
-    if (!config.admin.components.beforeDashboard) {
-      config.admin.components.beforeDashboard = []
-    }
-
-    config.admin.components.beforeDashboard.push(
-      `payload-plugin-square/client#BeforeDashboardClient`,
-    )
-    config.admin.components.beforeDashboard.push(
-      `payload-plugin-square/rsc#BeforeDashboardServer`,
-    )
-
     config.endpoints.push({
-      handler: customEndpointHandler,
-      method: 'get',
-      path: '/my-plugin-endpoint',
+      handler: makeSyncHandler({
+        accessToken: pluginOptions.accessToken,
+        environment: pluginOptions.environment,
+        locationId: pluginOptions.locationId,
+        mediaCollectionSlug,
+      }),
+      method: 'post',
+      path: '/square/sync',
     })
 
-    const incomingOnInit = config.onInit
+    if (pluginOptions.syncOnInit) {
+      const incomingOnInit = config.onInit
 
-    config.onInit = async (payload) => {
-      // Ensure we are executing any existing onInit functions before running our own.
-      if (incomingOnInit) {
-        await incomingOnInit(payload)
-      }
+      config.onInit = async (payload) => {
+        if (incomingOnInit) {
+          await incomingOnInit(payload)
+        }
 
-      const { totalDocs } = await payload.count({
-        collection: 'plugin-collection',
-        where: {
-          id: {
-            equals: 'seeded-by-plugin',
-          },
-        },
-      })
-
-      if (totalDocs === 0) {
-        await payload.create({
-          collection: 'plugin-collection',
-          data: {
-            id: 'seeded-by-plugin',
-          },
-        })
+        try {
+          const { synced } = await syncCatalog({
+            accessToken: pluginOptions.accessToken,
+            environment: pluginOptions.environment,
+            locationId: pluginOptions.locationId,
+            mediaCollectionSlug,
+            payload,
+          })
+          payload.logger.info(`Square catalog sync complete — ${synced} items synced`)
+        } catch (err) {
+          payload.logger.error({ err }, 'Square catalog sync on init failed')
+        }
       }
     }
 

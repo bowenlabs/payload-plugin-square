@@ -1,1 +1,2 @@
-export { BeforeDashboardServer } from '../components/BeforeDashboardServer.js'
+// React Server Component exports for payload-plugin-square
+// Reserved for future RSC components

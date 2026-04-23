@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm add *)",
+      "Bash(node -e \"const sq = require\\('square'\\); console.log\\(Object.keys\\(sq\\).filter\\(k => /client|env|catalog|inventory|square/i.test\\(k\\)\\).slice\\(0, 30\\)\\)\")",
+      "Bash(node -e ' *)",
+      "Bash(find node_modules/.pnpm -path \"*/square/package.json\" -exec grep '\"version\"' {} \\\\;)",
+      "Bash(find node_modules/.pnpm/square@44* -name \"*.d.ts\")",
+      "Bash(find node_modules/.pnpm/square@44* -path \"*/api/types/CatalogObject.d.ts\")",
+      "Bash(xargs cat *)",
+      "Bash(find node_modules/.pnpm/square@44* -path \"*/api/types/CatalogObjectItem.d.ts\")",
+      "Bash(find node_modules/.pnpm/square@44* -path \"*/api/resources/catalog/client/Client.d.ts\")",
+      "Bash(find node_modules/.pnpm/square@44* -path \"*/api/resources/inventory/client/Client.d.ts\")",
+      "Bash(find node_modules/.pnpm/square@44* -path \"*/core/pagination/Page.d.ts\")",
+      "Bash(pnpm exec *)",
+      "Bash(find node_modules/.pnpm/square@44* -path \"*/api/types/CatalogObjectImage.d.ts\")",
+      "Bash(find node_modules/.pnpm/square@44* -path \"*/api/types/CatalogImage.d.ts\")",
+      "Bash(find node_modules/.pnpm/square@44* -path \"*/api/types/BatchGetCatalogObjectsResponse.d.ts\")",
+      "Bash(find node_modules/.pnpm/square@44* -path \"*/core/fetcher/HttpResponsePromise.d.ts\")"
+    ]
+  }
+}

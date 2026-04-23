@@ -113,5 +113,8 @@
       "unrs-resolver"
     ]
   },
-  "registry": "https://registry.npmjs.org/"
+  "registry": "https://registry.npmjs.org/",
+  "dependencies": {
+    "square": "^44.0.1"
+  }
 }
