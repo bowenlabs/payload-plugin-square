@@ -1,4 +1,4 @@
-# @bowenlabs/@bowenlabs/payload-plugin-square
+# @bowenlabs/payload-plugin-square
 
 A [Payload CMS](https://payloadcms.com) plugin that integrates [Square](https://squareup.com/developers) for catalog sync, inventory tracking, payments, customers, and loyalty.
 
