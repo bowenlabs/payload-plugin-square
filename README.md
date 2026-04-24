@@ -1,4 +1,4 @@
-# payload-plugin-square
+# @bowenlabs/@bowenlabs/payload-plugin-square
 
 A [Payload CMS](https://payloadcms.com) plugin that integrates [Square](https://squareup.com/developers) for catalog sync, inventory tracking, payments, customers, and loyalty.
 
@@ -20,14 +20,14 @@ A [Payload CMS](https://payloadcms.com) plugin that integrates [Square](https://
 ## Installation
 
 ```bash
-pnpm add payload-plugin-square
+pnpm add @bowenlabs/payload-plugin-square
 ```
 
 ## Setup
 
 ```ts
 // payload.config.ts
-import { payloadPluginSquare } from 'payload-plugin-square'
+import { payloadPluginSquare } from '@bowenlabs/payload-plugin-square'
 
 export default buildConfig({
   plugins: [
