@@ -1,6 +1,6 @@
 {
   "name": "@bowenlabs/payload-plugin-square",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Payload CMS plugin for Square — catalog sync, inventory, checkout, shipping, loyalty, and subscriptions",
   "keywords": [
     "payload",
@@ -14,6 +14,10 @@
     "subscriptions",
     "cms"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bowenlabs/payload-plugin-square.git"
+  },
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -47,6 +51,7 @@
     "test:int": "vitest"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.31.0",
     "@eslint/eslintrc": "^3.3.5",
     "@payloadcms/db-mongodb": "3.82.1",
     "@payloadcms/db-postgres": "3.82.1",
