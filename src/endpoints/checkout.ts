@@ -160,7 +160,7 @@ export function createCheckoutHandler(options: PayloadPluginSquareConfig): Paylo
         catalogObjectIds: variationIds,
         locationIds,
       })) {
-        if (count.catalogObjectId && count.quantity !== undefined) {
+        if (count.catalogObjectId && count.quantity != null) {
           inventoryMap.set(count.catalogObjectId, parseFloat(count.quantity))
         }
       }

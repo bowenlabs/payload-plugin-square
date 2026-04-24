@@ -35,6 +35,7 @@ export function createListSubscriptionsHandler(options: PayloadPluginSquareConfi
       return Response.json({ subscriptions: [], totalDocs: 0, hasMore: false })
     }
 
+    if (!req.url) return Response.json({ error: 'Invalid request' }, { status: 400 })
     const url = new URL(req.url)
     const page = Math.max(1, parseInt(url.searchParams.get('page') ?? '1', 10))
     const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') ?? '20', 10)))

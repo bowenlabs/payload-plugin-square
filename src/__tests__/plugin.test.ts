@@ -131,7 +131,7 @@ describe('payloadPluginSquare — scheduled sync', () => {
   })
 
   it('merges with an existing autoRun array', () => {
-    const existing = [{ cron: '*/5 * * * *', limit: 1, task: 'other-task' }]
+    const existing = [{ cron: '*/5 * * * *', limit: 1 }]
     const config = payloadPluginSquare({
       ...baseOptions,
       syncSchedule: '0 * * * *',
@@ -140,8 +140,8 @@ describe('payloadPluginSquare — scheduled sync', () => {
     expect(Array.isArray(autoRun)).toBe(true)
     if (Array.isArray(autoRun)) {
       expect(autoRun).toHaveLength(2)
-      expect(autoRun.some((r) => r.task === 'other-task')).toBe(true)
-      expect(autoRun.some((r) => r.task === 'square-catalog-sync')).toBe(true)
+      expect(autoRun.some((r) => r.cron === '*/5 * * * *')).toBe(true)
+      expect(autoRun.some((r) => r.cron === '0 * * * *')).toBe(true)
     }
   })
 

@@ -203,7 +203,7 @@ export const payloadPluginSquare =
           },
         },
       ]
-      const newAutoRun = { cron: pluginOptions.syncSchedule, limit: 1, task: taskSlug }
+      const newAutoRun = { cron: pluginOptions.syncSchedule, limit: 1 }
       const existingAutoRun = config.jobs.autoRun
       if (typeof existingAutoRun === 'function') {
         config.jobs.autoRun = async (payload) => {
